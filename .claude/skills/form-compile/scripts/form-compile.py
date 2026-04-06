@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# form-compile v1.2 — Compile 1C managed form from JSON
+# form-compile v1.0 — Compile 1C managed form from JSON
 # Source: https://github.com/Nikolay-Shirokov/cc-1c-skills
 import argparse
 import json
@@ -202,26 +202,10 @@ DCS_MAP = {
 
 CFG_REF_PATTERN = re.compile(
     r'^(CatalogRef|CatalogObject|DocumentRef|DocumentObject|EnumRef|'
-    r'ChartOfAccountsRef|ChartOfAccountsObject|ChartOfCharacteristicTypesRef|ChartOfCharacteristicTypesObject|'
-    r'ChartOfCalculationTypesRef|ChartOfCalculationTypesObject|'
-    r'ExchangePlanRef|ExchangePlanObject|BusinessProcessRef|BusinessProcessObject|TaskRef|TaskObject|'
-    r'InformationRegisterRecordSet|InformationRegisterRecordManager|'
-    r'AccumulationRegisterRecordSet|AccountingRegisterRecordSet|'
-    r'ConstantsSet|DataProcessorObject|ReportObject)\.'
+    r'ChartOfAccountsRef|ChartOfCharacteristicTypesRef|ChartOfCalculationTypesRef|'
+    r'ExchangePlanRef|BusinessProcessRef|TaskRef|'
+    r'InformationRegisterRecordSet|AccumulationRegisterRecordSet|DataProcessorObject)\.'
 )
-
-KNOWN_INVALID_TYPES = {
-    'FormDataStructure': 'Runtime type. Use cfg:*Object.XXX (e.g. CatalogObject.XXX)',
-    'FormDataCollection': 'Runtime type. Use ValueTable',
-    'FormDataTree': 'Runtime type. Use ValueTree',
-    'FormDataTreeItem': 'Runtime type, not valid in XML',
-    'FormDataCollectionItem': 'Runtime type, not valid in XML',
-    'FormGroup': 'UI element type, not a data type',
-    'FormField': 'UI element type, not a data type',
-    'FormButton': 'UI element type, not a data type',
-    'FormDecoration': 'UI element type, not a data type',
-    'FormTable': 'UI element type, not a data type',
-}
 
 
 _FORM_TYPE_SYNONYMS = {
@@ -328,14 +312,10 @@ def emit_single_type(lines, type_str, indent):
         lines.append(f'{indent}<v8:Type>cfg:{type_str}</v8:Type>')
         return
 
-    # Fallback with validation
-    if type_str in KNOWN_INVALID_TYPES:
-        print(f"WARNING: Type '{type_str}': {KNOWN_INVALID_TYPES[type_str]}", file=sys.stderr)
+    # Fallback
     if '.' in type_str:
         lines.append(f'{indent}<v8:Type>cfg:{type_str}</v8:Type>')
     else:
-        if type_str not in KNOWN_INVALID_TYPES:
-            print(f"WARNING: Unrecognized bare type '{type_str}' — will be emitted without namespace prefix", file=sys.stderr)
         lines.append(f'{indent}<v8:Type>{type_str}</v8:Type>')
 
 
@@ -886,6 +866,22 @@ def emit_attributes(lines, attrs, indent):
         if attr.get('fillChecking'):
             lines.append(f'{inner}<FillChecking>{attr["fillChecking"]}</FillChecking>')
 
+        # Settings (for DynamicList — mainTable)
+        attr_type = str(attr.get('type', ''))
+        if attr_type == 'DynamicList' and attr.get('mainTable'):
+            main_table = str(attr['mainTable'])
+            lines.append(f'{inner}<Settings xsi:type="DynamicList">')
+            if attr.get('manualQuery') is True:
+                lines.append(f'{inner}\t<ManualQuery>true</ManualQuery>')
+                lines.append(f'{inner}\t<DynamicDataRead>true</DynamicDataRead>')
+                if attr.get('queryText'):
+                    lines.append(f'{inner}\t<QueryText>{attr["queryText"]}</QueryText>')
+            else:
+                lines.append(f'{inner}\t<ManualQuery>false</ManualQuery>')
+                lines.append(f'{inner}\t<DynamicDataRead>true</DynamicDataRead>')
+            lines.append(f'{inner}\t<MainTable>{main_table}</MainTable>')
+            lines.append(f'{inner}</Settings>')
+
         # Columns (for ValueTable/ValueTree)
         if attr.get('columns') and len(attr['columns']) > 0:
             lines.append(f'{inner}<Columns>')
@@ -1002,22 +998,6 @@ def emit_properties(lines, props, indent):
         lines.append(f'{indent}<{xml_name}>{val}</{xml_name}>')
 
 
-def detect_format_version(d):
-    while d:
-        cfg_path = os.path.join(d, "Configuration.xml")
-        if os.path.isfile(cfg_path):
-            with open(cfg_path, "r", encoding="utf-8-sig") as f:
-                head = f.read(2000)
-            m = re.search(r'<MetaDataObject[^>]+version="(\d+\.\d+)"', head)
-            if m:
-                return m.group(1)
-        parent = os.path.dirname(d)
-        if parent == d:
-            break
-        d = parent
-    return "2.17"
-
-
 def main():
     sys.stdout.reconfigure(encoding="utf-8")
     sys.stderr.reconfigure(encoding="utf-8")
@@ -1027,10 +1007,6 @@ def main():
     parser.add_argument('-JsonPath', type=str, required=True)
     parser.add_argument('-OutputPath', type=str, required=True)
     args = parser.parse_args()
-
-    # --- Detect XML format version ---
-    out_path_resolved = args.OutputPath if os.path.isabs(args.OutputPath) else os.path.join(os.getcwd(), args.OutputPath)
-    format_version = detect_format_version(os.path.dirname(out_path_resolved))
 
     # --- 1. Load and validate JSON ---
     json_path = args.JsonPath
@@ -1046,7 +1022,7 @@ def main():
     lines = []
 
     lines.append('<?xml version="1.0" encoding="UTF-8"?>')
-    lines.append(f'<Form xmlns="http://v8.1c.ru/8.3/xcf/logform" xmlns:app="http://v8.1c.ru/8.2/managed-application/core" xmlns:cfg="http://v8.1c.ru/8.1/data/enterprise/current-config" xmlns:dcscor="http://v8.1c.ru/8.1/data-composition-system/core" xmlns:dcssch="http://v8.1c.ru/8.1/data-composition-system/schema" xmlns:dcsset="http://v8.1c.ru/8.1/data-composition-system/settings" xmlns:ent="http://v8.1c.ru/8.1/data/enterprise" xmlns:lf="http://v8.1c.ru/8.2/managed-application/logform" xmlns:style="http://v8.1c.ru/8.1/data/ui/style" xmlns:sys="http://v8.1c.ru/8.1/data/ui/fonts/system" xmlns:v8="http://v8.1c.ru/8.1/data/core" xmlns:v8ui="http://v8.1c.ru/8.1/data/ui" xmlns:web="http://v8.1c.ru/8.1/data/ui/colors/web" xmlns:win="http://v8.1c.ru/8.1/data/ui/colors/windows" xmlns:xr="http://v8.1c.ru/8.3/xcf/readable" xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" version="{format_version}">')
+    lines.append('<Form xmlns="http://v8.1c.ru/8.3/xcf/logform" xmlns:app="http://v8.1c.ru/8.2/managed-application/core" xmlns:cfg="http://v8.1c.ru/8.1/data/enterprise/current-config" xmlns:dcscor="http://v8.1c.ru/8.1/data-composition-system/core" xmlns:dcssch="http://v8.1c.ru/8.1/data-composition-system/schema" xmlns:dcsset="http://v8.1c.ru/8.1/data-composition-system/settings" xmlns:ent="http://v8.1c.ru/8.1/data/enterprise" xmlns:lf="http://v8.1c.ru/8.2/managed-application/logform" xmlns:style="http://v8.1c.ru/8.1/data/ui/style" xmlns:sys="http://v8.1c.ru/8.1/data/ui/fonts/system" xmlns:v8="http://v8.1c.ru/8.1/data/core" xmlns:v8ui="http://v8.1c.ru/8.1/data/ui" xmlns:web="http://v8.1c.ru/8.1/data/ui/colors/web" xmlns:win="http://v8.1c.ru/8.1/data/ui/colors/windows" xmlns:xr="http://v8.1c.ru/8.3/xcf/readable" xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" version="2.17">')
 
     # Title
     form_title = defn.get('title')

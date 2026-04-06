@@ -964,14 +964,20 @@ export async function readTable({ maxRows = 20, offset = 0, table } = {}) {
   return await page.evaluate(readTableScript(formNum, { maxRows, offset, gridSelector }));
 }
 
-// --- Spreadsheet helpers (shared by readSpreadsheet and clickElement) ---
-
 /**
- * Scan spreadsheet iframes for the current form and collect all cells.
- * Returns { allCells: Map<'r_c', {r,c,t}>, frameMap: Map<'r_c', frameIndex> }
- * where frameIndex is the Playwright frames[] index (1-based, 0 = main).
+ * Read report output (SpreadsheetDocumentField) rendered in iframes.
+ * 1C renders spreadsheet documents as absolutely-positioned div cells inside iframes.
+ * Each cell is a div[x] inside a row div[y], text content in <span>.
+ *
+ * Returns structured data:
+ *   { title, headers, data: [{col: val}], totals: {col: val}, total }
+ * If header detection fails, falls back to { rows: string[][], total }.
  */
-async function scanSpreadsheetCells(formNum) {
+export async function readSpreadsheet() {
+  ensureConnected();
+  const formNum = await page.evaluate(detectFormScript());
+
+  // Collect iframe indices that belong to the current form's spreadsheet container
   const iframeIndices = await page.evaluate(`(() => {
     const prefix = 'form${formNum ?? 0}_';
     const allIframes = [...document.querySelectorAll('iframe')];
@@ -990,11 +996,11 @@ async function scanSpreadsheetCells(formNum) {
 
   const frames = page.frames();
   const allCells = new Map();
-  const frameMap = new Map(); // key 'r_c' → Playwright frame index
 
+  // Map page iframe indices to frame objects (frame 0 = main, iframes start at 1+)
   for (const iframeIdx of iframeIndices) {
-    const frameIndex = iframeIdx + 1;
-    const frame = frames[frameIndex];
+    // Playwright frames: frame[0] is main, frame[1..N] map to iframes in DOM order
+    const frame = frames[iframeIdx + 1];
     if (!frame) continue;
     try {
       const cells = await frame.evaluate(`(() => {
@@ -1014,20 +1020,14 @@ async function scanSpreadsheetCells(formNum) {
         const key = `${cell.r}_${cell.c}`;
         if (!allCells.has(key) || cell.t.length > allCells.get(key).t.length) {
           allCells.set(key, cell);
-          frameMap.set(key, frameIndex);
         }
       }
     } catch { /* skip inaccessible frames */ }
   }
-  return { allCells, frameMap };
-}
 
-/**
- * Build structured mapping from raw cells: headers, column map, data/totals row indices.
- * Returns { rows, sortedRows, maxCol, colNames, headerRowIdx, dataStartIdx, totalsRowIdx, rowMap }
- * or null if header detection fails.
- */
-function buildSpreadsheetMapping(allCells) {
+  if (allCells.size === 0) throw new Error('readSpreadsheet: no SpreadsheetDocument found. Report may not be generated yet.');
+
+  // Group by row, determine max columns
   const rowMap = new Map();
   let maxCol = 0;
   for (const cell of allCells.values()) {
@@ -1038,55 +1038,49 @@ function buildSpreadsheetMapping(allCells) {
 
   const sortedRows = [...rowMap.keys()].sort((a, b) => a - b);
   const rows = sortedRows.map(r => {
-    const cm = rowMap.get(r);
+    const colMap = rowMap.get(r);
     const arr = [];
-    for (let c = 0; c <= maxCol; c++) arr.push(cm.get(c) || '');
+    for (let c = 0; c <= maxCol; c++) arr.push(colMap.get(c) || '');
     return arr;
   });
 
+  // --- Structured parsing ---
   const hasNumber = (row) => row.some(c => /^[\d\s\u00a0]/.test(c) && /\d/.test(c));
   const nonEmpty = (row) => row.filter(c => c !== '').length;
 
-  // Find first data row (first row with numbers)
+  // 1. Find first data row (first row with numbers)
   let firstDataIdx = rows.length;
   for (let i = 0; i < rows.length; i++) {
     if (hasNumber(rows[i])) { firstDataIdx = i; break; }
   }
 
-  // Find header rows
+  // 2. Find header rows: scan backwards from data, pick last row with ≥3 cells as detail header
   let detailIdx = -1;
   for (let i = firstDataIdx - 1; i >= 0; i--) {
-    if (nonEmpty(rows[i]) >= Math.min(3, maxCol + 1)) { detailIdx = i; break; }
+    if (nonEmpty(rows[i]) >= 3) { detailIdx = i; break; }
   }
-  if (detailIdx === -1) return null; // no headers detected
+  if (detailIdx === -1) return { rows, total: rows.length };
 
+  // Group header: row before detail with ≥2 non-empty cells
   let groupIdx = -1;
   if (detailIdx > 0 && nonEmpty(rows[detailIdx - 1]) >= 2) groupIdx = detailIdx - 1;
 
   const detailRow = rows[detailIdx];
   const groupRow = groupIdx >= 0 ? rows[groupIdx] : null;
 
-  // Detect optional third header level above group row (bounds carry-forward)
-  let superRow = null;
-  if (groupIdx > 0 && nonEmpty(rows[groupIdx - 1]) >= 2) {
-    superRow = rows[groupIdx - 1];
-  }
-
-  // Build column names (group + detail merge)
+  // 3. Build column names by merging group + detail rows
+  //    Fill-forward group names across empty columns (merged cells)
   const groupFilled = new Array(maxCol + 1).fill('');
   if (groupRow) {
     let cur = '';
     for (let c = 0; c <= maxCol; c++) {
-      if (groupRow[c]) {
-        cur = groupRow[c];
-      } else if (superRow && superRow[c]) {
-        // New top-level header starts here — stop carry-forward
-        cur = '';
-      }
+      if (groupRow[c]) cur = groupRow[c];
       groupFilled[c] = cur;
     }
   }
 
+  // For each column: use detail name if available, else group name
+  // Prefix with group when duplicates exist in detail row
   const detailCounts = {};
   for (let c = 0; c <= maxCol; c++) {
     const n = detailRow[c];
@@ -1098,304 +1092,20 @@ function buildSpreadsheetMapping(allCells) {
     const detail = detailRow[c];
     const group = groupFilled[c];
     if (detail) {
+      // Use group prefix if duplicate detail names or if group differs from detail
       const needPrefix = group && group !== detail && (detailCounts[detail] > 1 || (groupRow && groupRow[c] === ''));
       colNames.push(needPrefix ? `${group} / ${detail}` : detail);
     } else if (group) {
       colNames.push(group);
-    } else if (superRow && superRow[c]) {
-      colNames.push(superRow[c]);
     } else {
       colNames.push(null);
     }
   }
 
-  // Column name → physical column index
-  const colMap = new Map();
-  for (let c = 0; c < colNames.length; c++) {
-    if (colNames[c]) colMap.set(colNames[c], c);
-  }
+  // 4. Data starts at firstDataIdx
+  const dataStart = firstDataIdx;
 
-  // Classify data rows: separate data indices and totals index
-  const dataRowIndices = []; // indices into rows[] array
-  let totalsRowIdx = -1;
-  for (let i = firstDataIdx; i < rows.length; i++) {
-    if (!hasNumber(rows[i]) && nonEmpty(rows[i]) === 0) continue;
-    const first = rows[i][0]?.trim().toLowerCase();
-    if (first === 'итого' || first === 'всего') {
-      totalsRowIdx = i;
-    } else {
-      dataRowIndices.push(i);
-    }
-  }
-
-  return {
-    rows, sortedRows, maxCol, colNames, colMap,
-    headerRowIdx: detailIdx, groupRowIdx: groupIdx,
-    dataStartIdx: firstDataIdx, dataRowIndices, totalsRowIdx,
-    rowMap, hasNumber, nonEmpty,
-  };
-}
-
-/**
- * Scroll SpreadsheetDocument to make a cell visible using arrow keys.
- * Uses native platform scroll — keeps headers, data, and scrollbar synchronized.
- *
- * How it works:
- * 1. Check target cell visibility via Playwright boundingBox (page-level coords).
- * 2. Click a fully-visible cell via page.mouse.click through the mxlCurrBody overlay.
- *    This is the same native click that clickSpreadsheetCell uses — it gives keyboard
- *    focus to the spreadsheet and keeps headers/data/scrollbar in sync.
- *    (frame.locator().click() bypasses overlay → desyncs frozen headers;
- *     page.mouse.click() + frameEl.focus() doesn't transfer keyboard focus.)
- * 3. Press ArrowRight/ArrowLeft until the target cell is fully within the viewport.
- *
- * @param {Frame} frame - Playwright Frame containing the spreadsheet cells
- * @param {number} physRow - physical row (y attribute) in the frame
- * @param {number} physCol - physical column (x attribute) in the frame
- * @param {Locator} cellLoc - Playwright locator for the target cell (from caller)
- */
-async function scrollSpreadsheetToCell(frame, physRow, physCol, cellLoc) {
-  const pageVw = await page.evaluate('window.innerWidth');
-  // Get iframe bounds — the actual visible region on page.
-  // The iframe may extend behind the section panel on the left, so cells with
-  // x >= 0 but x < iframeBox.x are behind the panel. Clicking them hits the panel.
-  const frameElm = await frame.frameElement();
-  const frameBox = await frameElm.boundingBox();
-  const visLeft = frameBox ? frameBox.x : 0;
-  const visRight = frameBox ? Math.min(frameBox.x + frameBox.width, pageVw) : pageVw;
-
-  const getBox = async () => {
-    try { return await cellLoc.boundingBox({ timeout: 500 }); }
-    catch { return null; }
-  };
-  const isFullyVisible = (box) => box && box.x >= visLeft && (box.x + box.width) <= visRight;
-
-  let box = await getBox();
-  if (!box) return; // cell not in DOM
-  if (isFullyVisible(box)) return;
-
-  const direction = (box.x + box.width) > pageVw ? 'ArrowRight' : 'ArrowLeft';
-
-  // Find a fully-visible cell to click for focus.
-  // Prefer cells in the target row (scrollable area), fall back to any row.
-  const targetRowSel = `div[y="${physRow}"] div[x]`;
-  const anyRowSel = 'div[x]';
-  let focusClicked = false;
-  for (const sel of [targetRowSel, anyRowSel]) {
-    const locs = frame.locator(sel);
-    const count = await locs.count();
-    const candidates = [];
-    for (let ci = 0; ci < count; ci++) {
-      const b = await locs.nth(ci).boundingBox();
-      if (b && b.width > 5 && b.x >= visLeft && (b.x + b.width) <= visRight) {
-        candidates.push({ ci, box: b });
-      }
-    }
-    if (candidates.length === 0) continue;
-    candidates.sort((a, b) => a.box.x - b.box.x);
-    // ArrowRight → rightmost fully-visible (each press scrolls right immediately)
-    // ArrowLeft  → leftmost fully-visible  (each press scrolls left immediately)
-    const pick = direction === 'ArrowRight'
-      ? candidates[candidates.length - 1]
-      : candidates[0];
-    // Native click through overlay — gives keyboard focus + no header desync.
-    await page.mouse.click(pick.box.x + pick.box.width / 2, pick.box.y + pick.box.height / 2);
-    await page.waitForTimeout(100);
-    focusClicked = true;
-    break;
-  }
-  if (!focusClicked) return; // no visible cells — can't scroll
-
-  // Arrow keys until cell is fully visible or we detect no progress.
-  const MAX_STALE = 5; // bail out if arrows aren't scrolling (lost focus?)
-  let prevCx = box.x + box.width / 2;
-  let staleCount = 0;
-  for (let i = 0; i < 100; i++) {
-    await page.keyboard.press(direction);
-    await page.waitForTimeout(50);
-    box = await getBox();
-    if (!box) break;
-    if (isFullyVisible(box)) break;
-    const cx = box.x + box.width / 2;
-    if (Math.abs(cx - prevCx) >= 1) {
-      staleCount = 0;
-    } else {
-      staleCount++;
-      if (staleCount >= MAX_STALE) break;
-    }
-    prevCx = cx;
-  }
-  await page.waitForTimeout(200);
-}
-
-/**
- * Click a cell in SpreadsheetDocument by logical coordinates.
- * target: { row: number|'totals'|{colName: value}, column: string }
- * Internal helper — called from clickElement when first arg is an object.
- */
-async function clickSpreadsheetCell(target, { dblclick: dbl, modifier } = {}) {
-  ensureConnected();
-  const formNum = await page.evaluate(detectFormScript());
-  const { allCells, frameMap } = await scanSpreadsheetCells(formNum);
-  if (allCells.size === 0) throw new Error('clickElement: no SpreadsheetDocument found on current form.');
-
-  const mapping = buildSpreadsheetMapping(allCells);
-  if (!mapping) throw new Error('clickElement: could not detect spreadsheet headers. Use readSpreadsheet() to check report structure.');
-
-  const { rows, sortedRows, colNames, colMap, dataRowIndices, totalsRowIdx } = mapping;
-
-  // Resolve column
-  const colName = target.column;
-  if (!colMap.has(colName)) {
-    const available = colNames.filter(n => n);
-    throw new Error(`clickElement: column "${colName}" not found. Available: ${available.join(', ')}`);
-  }
-  const physCol = colMap.get(colName);
-
-  // Resolve row → index into rows[] array
-  let rowIdx;
-  const row = target.row;
-  if (row === 'totals') {
-    if (totalsRowIdx === -1) throw new Error('clickElement: no totals row found in spreadsheet.');
-    rowIdx = totalsRowIdx;
-  } else if (typeof row === 'number') {
-    if (row < 0 || row >= dataRowIndices.length) throw new Error(`clickElement: row index ${row} out of range (0..${dataRowIndices.length - 1}).`);
-    rowIdx = dataRowIndices[row];
-  } else if (typeof row === 'object') {
-    // Filter: { colName: value } — find first data row where column matches
-    const filterEntries = Object.entries(row);
-    const norm = s => s?.replace(/\u00a0/g, ' ').trim().toLowerCase() || '';
-    rowIdx = dataRowIndices.find(i => {
-      return filterEntries.every(([fCol, fVal]) => {
-        const fColIdx = colMap.get(fCol);
-        if (fColIdx == null) return false;
-        const cellText = norm(rows[i][fColIdx]);
-        const search = norm(fVal);
-        return cellText === search || cellText.includes(search);
-      });
-    });
-    if (rowIdx == null) throw new Error(`clickElement: no row matching ${JSON.stringify(row)} found in spreadsheet data.`);
-  } else {
-    throw new Error('clickElement: row must be a number, "totals", or { colName: value } filter object.');
-  }
-
-  // Map rows[] index → physical row number
-  const physRow = sortedRows[rowIdx];
-  const cellKey = `${physRow}_${physCol}`;
-  const frameIndex = frameMap.get(cellKey);
-  if (!frameIndex) {
-    // Cell exists in mapping but might be empty — try clicking anyway
-    throw new Error(`clickElement: cell at row=${JSON.stringify(target.row)}, column="${colName}" is empty or not rendered.`);
-  }
-
-  // Get bounding box and click via page.mouse (bypasses mxlCurrBody overlay)
-  const frame = page.frames()[frameIndex];
-  // Use [y]+[x] attributes — CSS class RxCy uses different numbering than y/x attrs.
-  const cellDiv = frame.locator(`div[y="${physRow}"] div[x="${physCol}"]`).first();
-  // Scroll cell into view using arrow keys — the only reliable way to scroll
-  // 1C SpreadsheetDocument without desynchronizing headers, data, and scrollbar.
-  await scrollSpreadsheetToCell(frame, physRow, physCol, cellDiv);
-  const box = await cellDiv.boundingBox();
-  if (!box) throw new Error(`clickElement: cell y=${physRow} x=${physCol} not visible (no bounding box).`);
-
-  const x = box.x + box.width / 2;
-  const y = box.y + box.height / 2;
-  const modKey = modifier === 'ctrl' ? 'Control' : modifier === 'shift' ? 'Shift' : null;
-  if (modKey) await page.keyboard.down(modKey);
-  if (dbl) {
-    await page.mouse.dblclick(x, y);
-  } else {
-    await page.mouse.click(x, y);
-  }
-  if (modKey) await page.keyboard.up(modKey);
-
-  await waitForStable();
-  const state = await getFormState();
-  state.clicked = { kind: 'spreadsheetCell', row: target.row, column: colName, ...(dbl ? { dblclick: true } : {}) };
-  return state;
-}
-
-/**
- * Search spreadsheet iframes for a cell matching text (for text fallback in clickElement).
- * Returns { frameIndex, physRow, physCol, box } or null if not found.
- */
-async function findSpreadsheetCellByText(formNum, searchText) {
-  const { allCells, frameMap } = await scanSpreadsheetCells(formNum);
-  if (allCells.size === 0) return null;
-
-  const norm = s => s?.replace(/\u00a0/g, ' ').trim().toLowerCase() || '';
-  const target = norm(searchText);
-
-  // Exact match first, then includes
-  let found = null;
-  for (const [key, cell] of allCells) {
-    if (norm(cell.t) === target) { found = { key, cell }; break; }
-  }
-  if (!found) {
-    for (const [key, cell] of allCells) {
-      if (norm(cell.t).includes(target)) { found = { key, cell }; break; }
-    }
-  }
-  if (!found) return null;
-
-  const frameIndex = frameMap.get(found.key);
-  if (!frameIndex) return null;
-
-  const frame = page.frames()[frameIndex];
-  // Scroll cell into view using native arrow-key mechanism
-  const cellDiv = frame.locator(`div[y="${found.cell.r}"] div[x="${found.cell.c}"]`).first();
-  await scrollSpreadsheetToCell(frame, found.cell.r, found.cell.c, cellDiv);
-  const box = await cellDiv.boundingBox();
-  if (!box) return null;
-
-  return { frameIndex, physRow: found.cell.r, physCol: found.cell.c, text: found.cell.t, box };
-}
-
-/**
- * Read report output (SpreadsheetDocumentField) rendered in iframes.
- * 1C renders spreadsheet documents as absolutely-positioned div cells inside iframes.
- * Each cell is a div[x] inside a row div[y], text content in <span>.
- *
- * Returns structured data:
- *   { title, headers, data: [{col: val}], totals: {col: val}, total }
- * If header detection fails, falls back to { rows: string[][], total }.
- */
-export async function readSpreadsheet() {
-  ensureConnected();
-  const formNum = await page.evaluate(detectFormScript());
-
-  const { allCells } = await scanSpreadsheetCells(formNum);
-
-  if (allCells.size === 0) {
-    // Check for state window messages (info bar) that explain why the report is empty
-    const err = await checkForErrors();
-    const hint = err?.stateText?.length ? err.stateText.join('; ') : '';
-    throw new Error('readSpreadsheet: no SpreadsheetDocument found.' + (hint ? ' State: ' + hint : ' Report may not be generated yet.'));
-  }
-
-  const mapping = buildSpreadsheetMapping(allCells);
-  if (!mapping) {
-    // Fallback: return raw rows
-    const rowMap = new Map();
-    let maxCol = 0;
-    for (const cell of allCells.values()) {
-      if (!rowMap.has(cell.r)) rowMap.set(cell.r, new Map());
-      rowMap.get(cell.r).set(cell.c, cell.t);
-      if (cell.c > maxCol) maxCol = cell.c;
-    }
-    const sortedRows = [...rowMap.keys()].sort((a, b) => a - b);
-    const rows = sortedRows.map(r => {
-      const cm = rowMap.get(r);
-      const arr = [];
-      for (let c = 0; c <= maxCol; c++) arr.push(cm.get(c) || '');
-      return arr;
-    });
-    return { rows, total: rows.length };
-  }
-
-  const { rows, colNames, dataStartIdx, maxCol, groupRowIdx, headerRowIdx, hasNumber, nonEmpty } = mapping;
-
-  // Convert data rows to objects
+  // 5. Convert data rows to objects
   const data = [];
   let totals = null;
   const toObj = (row) => {
@@ -1406,7 +1116,7 @@ export async function readSpreadsheet() {
     return obj;
   };
 
-  for (let i = dataStartIdx; i < rows.length; i++) {
+  for (let i = dataStart; i < rows.length; i++) {
     if (!hasNumber(rows[i]) && nonEmpty(rows[i]) === 0) continue;
     const first = rows[i][0]?.trim().toLowerCase();
     if (first === 'итого' || first === 'всего') {
@@ -1416,8 +1126,8 @@ export async function readSpreadsheet() {
     }
   }
 
-  // Meta: title, params, filters from rows before header
-  const metaEnd = groupRowIdx >= 0 ? groupRowIdx : headerRowIdx;
+  // 6. Meta: title, params, filters from rows before header
+  const metaEnd = groupIdx >= 0 ? groupIdx : detailIdx;
   let title = '';
   const meta = [];
   for (let i = 0; i < metaEnd; i++) {
@@ -2221,15 +1931,9 @@ export async function fillField(name, value) {
   return fillFields({ [name]: value });
 }
 
-/** Click a button/hyperlink/tab on the current form. Use {dblclick: true} to double-click (open items from lists).
- *  First argument can also be an object { row, column } to click a SpreadsheetDocument cell. */
+/** Click a button/hyperlink/tab on the current form. Use {dblclick: true} to double-click (open items from lists). */
 export async function clickElement(text, { dblclick, table, toggle, expand, modifier, timeout } = {}) {
   ensureConnected();
-  // Dispatch to spreadsheet cell handler when first arg is { row, column }
-  if (typeof text === 'object' && text !== null && text.column != null) {
-    await dismissPendingErrors();
-    return clickSpreadsheetCell(text, { dblclick, modifier });
-  }
   await dismissPendingErrors();
   if (highlightMode) try { await highlight(text, { table }); await page.waitForTimeout(500); await unhighlight(); } catch {}
   let netMonitor = null;
@@ -2333,24 +2037,7 @@ export async function clickElement(text, { dblclick, table, toggle, expand, modi
       }
     }
   }
-  // Fallback: search spreadsheet iframes for text match before giving up
-  if (target?.error) {
-    const ssCell = await findSpreadsheetCellByText(formNum, text);
-    if (ssCell) {
-      const cx = ssCell.box.x + ssCell.box.width / 2;
-      const cy = ssCell.box.y + ssCell.box.height / 2;
-      const modKey = modifier === 'ctrl' ? 'Control' : modifier === 'shift' ? 'Shift' : null;
-      if (modKey) await page.keyboard.down(modKey);
-      if (dblclick) await page.mouse.dblclick(cx, cy);
-      else await page.mouse.click(cx, cy);
-      if (modKey) await page.keyboard.up(modKey);
-      await waitForStable();
-      const state = await getFormState();
-      state.clicked = { kind: 'spreadsheetCell', name: ssCell.text, ...(dblclick ? { dblclick: true } : {}) };
-      return state;
-    }
-    throw new Error(`clickElement: "${text}" not found. Available: ${target.available?.join(', ') || 'none'}`);
-  }
+  if (target?.error) throw new Error(`clickElement: "${text}" not found. Available: ${target.available?.join(', ') || 'none'}`);
 
   // Helper: click with optional modifier key (Ctrl/Shift for multi-select)
   const modKey = modifier === 'ctrl' ? 'Control' : modifier === 'shift' ? 'Shift' : null;

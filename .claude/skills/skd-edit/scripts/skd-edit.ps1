@@ -1,4 +1,4 @@
-﻿# skd-edit v1.6 — Atomic 1C DCS editor
+﻿# skd-edit v1.2 — Atomic 1C DCS editor
 # Source: https://github.com/Nikolay-Shirokov/cc-1c-skills
 param(
 	[Parameter(Mandatory)]
@@ -9,8 +9,8 @@ param(
 		"add-field","add-total","add-calculated-field","add-parameter","add-filter",
 		"add-dataParameter","add-order","add-selection","add-dataSetLink",
 		"add-dataSet","add-variant","add-conditionalAppearance",
-		"set-query","patch-query","set-outputParameter","set-structure",
-		"modify-field","modify-filter","modify-dataParameter","modify-parameter",
+		"set-query","set-outputParameter","set-structure",
+		"modify-field","modify-filter","modify-dataParameter",
 		"clear-selection","clear-order","clear-filter",
 		"remove-field","remove-total","remove-calculated-field","remove-parameter","remove-filter")]
 	[string]$Operation,
@@ -357,9 +357,6 @@ function Parse-FilterShorthand {
 			} elseif ($valPart -match '^\d+(\.\d+)?$') {
 				$result.value = $valPart
 				$result["valueType"] = "xs:decimal"
-			} elseif ($valPart -match '^(Перечисление|Справочник|ПланСчетов|Документ|ПланВидовХарактеристик|ПланВидовРасчета)\.') {
-				$result.value = $valPart
-				$result["valueType"] = "dcscor:DesignTimeValue"
 			} else {
 				$result.value = $valPart
 				$result["valueType"] = "xs:string"
@@ -506,17 +503,12 @@ function Parse-ConditionalAppearanceShorthand {
 		$result.fields = @($forPart -split '\s*,\s*' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 	}
 
-	# Parse "when" filter (supports " or " for OrGroup)
+	# Parse "when" filter
 	if ($whenIdx -ge 0) {
 		$whenEnd = $s.Length
 		if ($forIdx -gt $whenIdx) { $whenEnd = $forIdx }
 		$whenPart = $s.Substring($whenIdx + 6, $whenEnd - $whenIdx - 6).Trim()
-		$orParts = $whenPart -split '\s+or\s+'
-		if ($orParts.Count -gt 1) {
-			$result.filter = @($orParts | ForEach-Object { Parse-FilterShorthand $_.Trim() })
-		} else {
-			$result.filter = Parse-FilterShorthand $whenPart
-		}
+		$result.filter = Parse-FilterShorthand $whenPart
 	}
 
 	# Parse main part: "Param = Value"
@@ -542,11 +534,6 @@ function Parse-StructureShorthand {
 	for ($i = $segments.Count - 1; $i -ge 0; $i--) {
 		$seg = $segments[$i].Trim()
 		$group = @{ type = "group" }
-
-		if ($seg -match '@name=(.+)') {
-			$group["name"] = $Matches[1].Trim()
-			$seg = ($seg -replace '\s*@name=.+', '').Trim()
-		}
 
 		if ($seg -match '^(?i)(details|детали)$') {
 			$group["groupBy"] = @()
@@ -866,32 +853,6 @@ function Build-SelectionItemFragment {
 	$lines = @()
 	if ($fieldName -eq "Auto") {
 		$lines += "$i<dcsset:item xsi:type=`"dcsset:SelectedItemAuto`"/>"
-	} elseif ($fieldName -match '^Folder\((.+)\)$') {
-		$inner = $Matches[1]
-		$colonIdx = $inner.IndexOf(':')
-		if ($colonIdx -gt 0) {
-			$title = $inner.Substring(0, $colonIdx).Trim()
-			$items = $inner.Substring($colonIdx + 1) -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ }
-		} else {
-			$title = ""
-			$items = $inner -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ }
-		}
-		$lines += "$i<dcsset:item xsi:type=`"dcsset:SelectedItemFolder`">"
-		if ($title) {
-			$lines += "$i`t<dcsset:lwsTitle>"
-			$lines += "$i`t`t<v8:item>"
-			$lines += "$i`t`t`t<v8:lang>ru</v8:lang>"
-			$lines += "$i`t`t`t<v8:content>$(Esc-Xml $title)</v8:content>"
-			$lines += "$i`t`t</v8:item>"
-			$lines += "$i`t</dcsset:lwsTitle>"
-		}
-		foreach ($item in $items) {
-			$lines += "$i`t<dcsset:item xsi:type=`"dcsset:SelectedItemField`">"
-			$lines += "$i`t`t<dcsset:field>$(Esc-Xml $item)</dcsset:field>"
-			$lines += "$i`t</dcsset:item>"
-		}
-		$lines += "$i`t<dcsset:placement>Auto</dcsset:placement>"
-		$lines += "$i</dcsset:item>"
 	} else {
 		$lines += "$i<dcsset:item xsi:type=`"dcsset:SelectedItemField`">"
 		$lines += "$i`t<dcsset:field>$(Esc-Xml $fieldName)</dcsset:field>"
@@ -1012,20 +973,6 @@ function Build-VariantFragment {
 	return $lines -join "`r`n"
 }
 
-function Emit-FilterComparison {
-	param($f, [string]$indent)
-	$lines = @()
-	$lines += "$indent<dcsset:item xsi:type=`"dcsset:FilterItemComparison`">"
-	$lines += "$indent`t<dcsset:left xsi:type=`"dcscor:Field`">$(Esc-Xml $f.field)</dcsset:left>"
-	$lines += "$indent`t<dcsset:comparisonType>$(Esc-Xml $f.op)</dcsset:comparisonType>"
-	if ($null -ne $f.value) {
-		$vt = if ($f["valueType"]) { $f["valueType"] } else { "xs:string" }
-		$lines += "$indent`t<dcsset:right xsi:type=`"$vt`">$(Esc-Xml "$($f.value)")</dcsset:right>"
-	}
-	$lines += "$indent</dcsset:item>"
-	return $lines
-}
-
 function Build-ConditionalAppearanceItemFragment {
 	param($parsed, [string]$indent)
 
@@ -1049,17 +996,15 @@ function Build-ConditionalAppearanceItemFragment {
 	# filter
 	if ($parsed.filter) {
 		$lines += "$i`t<dcsset:filter>"
-		if ($parsed.filter -is [array]) {
-			# OrGroup
-			$lines += "$i`t`t<dcsset:item xsi:type=`"dcsset:FilterItemGroup`">"
-			$lines += "$i`t`t`t<dcsset:groupType>OrGroup</dcsset:groupType>"
-			foreach ($f in $parsed.filter) {
-				$lines += Emit-FilterComparison $f "$i`t`t`t"
-			}
-			$lines += "$i`t`t</dcsset:item>"
-		} else {
-			$lines += Emit-FilterComparison $parsed.filter "$i`t`t"
+		$f = $parsed.filter
+		$lines += "$i`t`t<dcsset:item xsi:type=`"dcsset:FilterItemComparison`">"
+		$lines += "$i`t`t`t<dcsset:left xsi:type=`"dcscor:Field`">$(Esc-Xml $f.field)</dcsset:left>"
+		$lines += "$i`t`t`t<dcsset:comparisonType>$(Esc-Xml $f.op)</dcsset:comparisonType>"
+		if ($null -ne $f.value) {
+			$vt = if ($f["valueType"]) { $f["valueType"] } else { "xs:string" }
+			$lines += "$i`t`t`t<dcsset:right xsi:type=`"$vt`">$(Esc-Xml "$($f.value)")</dcsset:right>"
 		}
+		$lines += "$i`t`t</dcsset:item>"
 		$lines += "$i`t</dcsset:filter>"
 	} else {
 		$lines += "$i`t<dcsset:filter/>"
@@ -1068,25 +1013,18 @@ function Build-ConditionalAppearanceItemFragment {
 	# appearance
 	$lines += "$i`t<dcsset:appearance>"
 
+	# Auto-detect value type
 	$val = $parsed.value
-	$lines += "$i`t`t<dcscor:item xsi:type=`"dcsset:SettingsParameterValue`">"
-	$lines += "$i`t`t`t<dcscor:parameter>$(Esc-Xml $parsed.param)</dcscor:parameter>"
-
+	$valType = "xs:string"
 	if ($val -match '^(web|style|win):') {
-		$lines += "$i`t`t`t<dcscor:value xsi:type=`"v8ui:Color`">$(Esc-Xml $val)</dcscor:value>"
+		$valType = "v8ui:Color"
 	} elseif ($val -eq "true" -or $val -eq "false") {
-		$lines += "$i`t`t`t<dcscor:value xsi:type=`"xs:boolean`">$(Esc-Xml $val)</dcscor:value>"
-	} elseif ($parsed.param -eq "Формат" -or $parsed.param -eq "Текст" -or $parsed.param -eq "Заголовок") {
-		$lines += "$i`t`t`t<dcscor:value xsi:type=`"v8:LocalStringType`">"
-		$lines += "$i`t`t`t`t<v8:item>"
-		$lines += "$i`t`t`t`t`t<v8:lang>ru</v8:lang>"
-		$lines += "$i`t`t`t`t`t<v8:content>$(Esc-Xml $val)</v8:content>"
-		$lines += "$i`t`t`t`t</v8:item>"
-		$lines += "$i`t`t`t</dcscor:value>"
-	} else {
-		$lines += "$i`t`t`t<dcscor:value xsi:type=`"xs:string`">$(Esc-Xml $val)</dcscor:value>"
+		$valType = "xs:boolean"
 	}
 
+	$lines += "$i`t`t<dcscor:item xsi:type=`"dcsset:SettingsParameterValue`">"
+	$lines += "$i`t`t`t<dcscor:parameter>$(Esc-Xml $parsed.param)</dcscor:parameter>"
+	$lines += "$i`t`t`t<dcscor:value xsi:type=`"$valType`">$(Esc-Xml $val)</dcscor:value>"
 	$lines += "$i`t`t</dcscor:item>"
 	$lines += "$i`t</dcsset:appearance>"
 
@@ -1100,11 +1038,6 @@ function Build-StructureItemFragment {
 	$i = $indent
 	$lines = @()
 	$lines += "$i<dcsset:item xsi:type=`"dcsset:StructureItemGroup`">"
-
-	# name
-	if ($item["name"]) {
-		$lines += "$i`t<dcsset:name>$(Esc-Xml $item["name"])</dcsset:name>"
-	}
 
 	# groupItems
 	$groupBy = $item["groupBy"]
@@ -1512,8 +1445,6 @@ $corNs = "http://v8.1c.ru/8.1/data-composition-system/core"
 
 if ($Operation -eq "set-query" -or $Operation -eq "set-structure" -or $Operation -eq "add-dataSet") {
 	$values = @($Value)
-} elseif ($Operation -eq "patch-query") {
-	$values = @($Value -split ';;' | Where-Object { $_.Trim() })
 } else {
 	$values = @($Value -split ';;' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 }
@@ -1691,106 +1622,6 @@ switch ($Operation) {
 		}
 	}
 
-	"modify-parameter" {
-		foreach ($val in $values) {
-			# Parse: "ParamName key=value key=value"
-			$parts = $val -split '\s+', 2
-			$paramName = $parts[0].Trim()
-			$rest = if ($parts.Count -gt 1) { $parts[1].Trim() } else { "" }
-
-			# Find parameter element
-			$paramEl = Find-ElementByChildValue $xmlDoc.DocumentElement "parameter" "name" $paramName $schNs
-			if (-not $paramEl) {
-				Write-Host "[WARN] Parameter `"$paramName`" not found — skipped"
-				continue
-			}
-
-			$childIndent = Get-ChildIndent $paramEl
-
-			# Separate availableValue=... from simple kv pairs
-			$simpleRest = $rest
-			$avPart = $null
-			$avIdx = $rest.IndexOf('availableValue=')
-			if ($avIdx -ge 0) {
-				$simpleRest = $rest.Substring(0, $avIdx).Trim()
-				$avPart = $rest.Substring($avIdx)
-			}
-
-			# Process simple key=value pairs (use, denyIncompleteValues, etc.)
-			if ($simpleRest) {
-				$kvPairs = [regex]::Matches($simpleRest, '(\w+)=(\S+)')
-				foreach ($kv in $kvPairs) {
-					$key = $kv.Groups[1].Value
-					$value = $kv.Groups[2].Value
-
-					$existing = $paramEl.SelectSingleNode($key)
-					if ($existing) {
-						$existing.InnerText = $value
-						Write-Host "[OK] Parameter `"$paramName`": $key updated to $value"
-					} else {
-						# Schema order: ...value, useRestriction, availableValue*, denyIncompleteValues, use
-						$refNode = $null
-						if ($key -eq "denyIncompleteValues") {
-							foreach ($child in $paramEl.ChildNodes) {
-								if ($child.NodeType -eq 'Element' -and $child.LocalName -eq 'use') {
-									$refNode = $child; break
-								}
-							}
-						}
-						$fragXml = "$childIndent<$key>$(Esc-Xml $value)</$key>"
-						$nodes = Import-Fragment $xmlDoc $fragXml
-						foreach ($node in $nodes) {
-							Insert-BeforeElement $paramEl $node $refNode $childIndent
-						}
-						Write-Host "[OK] Parameter `"$paramName`": $key=$value added"
-					}
-				}
-			}
-
-			# Process availableValue
-			if ($avPart) {
-				$avRest = $avPart -replace '^availableValue=', ''
-				# Parse: "Перечисление...X presentation=текст с пробелами"
-				$avParts = $avRest -split '\s+presentation=', 2
-				$avValue = $avParts[0].Trim()
-				$avPresentation = if ($avParts.Count -gt 1) { $avParts[1].Trim() } else { "" }
-
-				# Detect value type
-				$avType = "xs:string"
-				if ($avValue -match '^(Перечисление|Справочник|ПланСчетов|Документ|ПланВидовХарактеристик|ПланВидовРасчета)\.') {
-					$avType = "dcscor:DesignTimeValue"
-				}
-
-				$avLines = @()
-				$avLines += "$childIndent<availableValue>"
-				$avLines += "$childIndent`t<value xsi:type=`"$avType`">$(Esc-Xml $avValue)</value>"
-				if ($avPresentation) {
-					$avLines += "$childIndent`t<presentation xsi:type=`"v8:LocalStringType`">"
-					$avLines += "$childIndent`t`t<v8:item>"
-					$avLines += "$childIndent`t`t`t<v8:lang>ru</v8:lang>"
-					$avLines += "$childIndent`t`t`t<v8:content>$(Esc-Xml $avPresentation)</v8:content>"
-					$avLines += "$childIndent`t`t</v8:item>"
-					$avLines += "$childIndent`t</presentation>"
-				}
-				$avLines += "$childIndent</availableValue>"
-				$fragXml = $avLines -join "`r`n"
-
-				# Insert before first of (denyIncompleteValues, use) in document order
-				$refNode = $null
-				foreach ($child in $paramEl.ChildNodes) {
-					if ($child.NodeType -eq 'Element' -and ($child.LocalName -eq 'denyIncompleteValues' -or $child.LocalName -eq 'use')) {
-						$refNode = $child; break
-					}
-				}
-				$nodes = Import-Fragment $xmlDoc $fragXml
-				foreach ($node in $nodes) {
-					Insert-BeforeElement $paramEl $node $refNode $childIndent
-				}
-				Write-Host "[OK] Parameter `"$paramName`": availableValue added"
-			}
-		}
-	}
-
 	"add-filter" {
 		$settings = Resolve-VariantSettings
 		$varName = Get-VariantName
@@ -1879,33 +1710,8 @@ switch ($Operation) {
 
 		foreach ($val in $values) {
 			$fieldName = $val.Trim()
-			$groupName = $null
 
-			# Extract @group=Name
-			if ($fieldName -match '\s*@group=(\S+)') {
-				$groupName = $Matches[1]
-				$fieldName = ($fieldName -replace '\s*@group=\S+', '').Trim()
-			}
-
-			if ($groupName) {
-				# Find named StructureItemGroup
-				$dcssetNs = "http://v8.1c.ru/8.1/data-composition-system/settings"
-				$xsiNs = "http://www.w3.org/2001/XMLSchema-instance"
-				$nsMgr = New-Object System.Xml.XmlNamespaceManager($xmlDoc.NameTable)
-				$nsMgr.AddNamespace("dcsset", $dcssetNs)
-				$nsMgr.AddNamespace("xsi", $xsiNs)
-				$groupEl = $settings.SelectSingleNode(".//dcsset:item[@xsi:type='dcsset:StructureItemGroup'][dcsset:name='$groupName']", $nsMgr)
-				if (-not $groupEl) {
-					Write-Host "[WARN] StructureItemGroup `"$groupName`" not found — adding to variant level"
-					$targetEl = $settings
-				} else {
-					$targetEl = $groupEl
-				}
-			} else {
-				$targetEl = $settings
-			}
-
-			$selection = Ensure-SettingsChild $targetEl "selection" @()
+			$selection = Ensure-SettingsChild $settings "selection" @()
 			$selIndent = Get-ContainerChildIndent $selection
 
 			$selXml = Build-SelectionItemFragment -fieldName $fieldName -indent $selIndent
@@ -1914,8 +1720,7 @@ switch ($Operation) {
 				Insert-BeforeElement $selection $node $null $selIndent
 			}
 
-			$target = if ($groupName) { "group `"$groupName`"" } else { "variant `"$varName`"" }
-			Write-Host "[OK] Selection `"$fieldName`" added to $target"
+			Write-Host "[OK] Selection `"$fieldName`" added to variant `"$varName`""
 		}
 	}
 
@@ -1933,34 +1738,6 @@ switch ($Operation) {
 		$queryEl.InnerText = Resolve-QueryValue $Value $script:queryBaseDir
 
 		Write-Host "[OK] Query replaced in dataset `"$dsName`""
-	}
-
-	"patch-query" {
-		$dsNode = Resolve-DataSet
-		$dsName = Get-DataSetName $dsNode
-
-		$queryEl = Find-FirstElement $dsNode @("query") $schNs
-		if (-not $queryEl) {
-			Write-Error "No <query> element found in dataset '$dsName'"
-			exit 1
-		}
-
-		foreach ($val in $values) {
-			$sepIdx = $val.IndexOf(" => ")
-			if ($sepIdx -lt 0) {
-				Write-Error "patch-query value must contain ' => ' separator: old => new"
-				exit 1
-			}
-			$oldStr = $val.Substring(0, $sepIdx)
-			$newStr = $val.Substring($sepIdx + 4)
-			$queryText = $queryEl.InnerText
-			if (-not $queryText.Contains($oldStr)) {
-				Write-Error "Substring not found in query of dataset '$dsName': $oldStr"
-				exit 1
-			}
-			$queryEl.InnerText = $queryText.Replace($oldStr, $newStr)
-			Write-Host "[OK] Query patched in dataset `"$dsName`": replaced '$oldStr'"
-		}
 	}
 
 	"set-outputParameter" {

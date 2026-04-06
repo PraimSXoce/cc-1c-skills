@@ -1,4 +1,4 @@
-# skd-edit v1.6 — Atomic 1C DCS editor (Python port)
+# skd-edit v1.2 — Atomic 1C DCS editor (Python port)
 # Source: https://github.com/Nikolay-Shirokov/cc-1c-skills
 import argparse
 import os
@@ -17,8 +17,8 @@ VALID_OPS = [
     "add-field", "add-total", "add-calculated-field", "add-parameter", "add-filter",
     "add-dataParameter", "add-order", "add-selection", "add-dataSetLink",
     "add-dataSet", "add-variant", "add-conditionalAppearance",
-    "set-query", "patch-query", "set-outputParameter", "set-structure",
-    "modify-field", "modify-filter", "modify-dataParameter", "modify-parameter",
+    "set-query", "set-outputParameter", "set-structure",
+    "modify-field", "modify-filter", "modify-dataParameter",
     "clear-selection", "clear-order", "clear-filter",
     "remove-field", "remove-total", "remove-calculated-field", "remove-parameter", "remove-filter",
 ]
@@ -350,9 +350,6 @@ def parse_filter_shorthand(s):
             elif re.match(r'^\d+(\.\d+)?$', val_part):
                 result["value"] = val_part
                 result["valueType"] = "xs:decimal"
-            elif re.match(r'^(Перечисление|Справочник|ПланСчетов|Документ|ПланВидовХарактеристик|ПланВидовРасчета)\.', val_part):
-                result["value"] = val_part
-                result["valueType"] = "dcscor:DesignTimeValue"
             else:
                 result["value"] = val_part
                 result["valueType"] = "xs:string"
@@ -411,7 +408,7 @@ def parse_order_shorthand(s):
     parts = s.split(None, 1)
     field = parts[0]
     direction = "Asc"
-    if len(parts) > 1 and re.match(r'^desc$', parts[1], re.IGNORECASE):
+    if len(parts) > 1 and re.match(r'(?i)^desc$', parts[1]):
         direction = "Desc"
     return {"field": field, "direction": direction}
 
@@ -483,11 +480,7 @@ def parse_conditional_appearance_shorthand(s):
         if for_idx > when_idx:
             when_end = for_idx
         when_part = s[when_idx + 6:when_end].strip()
-        or_parts = re.split(r'\s+or\s+', when_part)
-        if len(or_parts) > 1:
-            result["filter"] = [parse_filter_shorthand(p.strip()) for p in or_parts]
-        else:
-            result["filter"] = parse_filter_shorthand(when_part)
+        result["filter"] = parse_filter_shorthand(when_part)
 
     main_part = s[:main_end].strip()
     eq_idx = main_part.find("=")
@@ -509,12 +502,7 @@ def parse_structure_shorthand(s):
         seg = segments[i].strip()
         group = {"type": "group"}
 
-        name_m = re.search(r'\s*@name=(.+)', seg)
-        if name_m:
-            group["name"] = name_m.group(1).strip()
-            seg = re.sub(r'\s*@name=.+', '', seg).strip()
-
-        if re.match(r'^(details|\u0434\u0435\u0442\u0430\u043b\u0438)$', seg, re.IGNORECASE):
+        if re.match(r'^(?i)(details|\u0434\u0435\u0442\u0430\u043b\u0438)$', seg):
             group["groupBy"] = []
         else:
             group["groupBy"] = [seg]
@@ -772,31 +760,6 @@ def build_selection_item_fragment(field_name, indent):
     i = indent
     if field_name == "Auto":
         return f'{i}<dcsset:item xsi:type="dcsset:SelectedItemAuto"/>'
-    m = re.match(r'^Folder\((.+)\)$', field_name)
-    if m:
-        inner = m.group(1)
-        colon_idx = inner.find(':')
-        if colon_idx > 0:
-            title = inner[:colon_idx].strip()
-            items = [x.strip() for x in inner[colon_idx + 1:].split(',') if x.strip()]
-        else:
-            title = ""
-            items = [x.strip() for x in inner.split(',') if x.strip()]
-        lines = [f'{i}<dcsset:item xsi:type="dcsset:SelectedItemFolder">']
-        if title:
-            lines.append(f"{i}\t<dcsset:lwsTitle>")
-            lines.append(f"{i}\t\t<v8:item>")
-            lines.append(f"{i}\t\t\t<v8:lang>ru</v8:lang>")
-            lines.append(f"{i}\t\t\t<v8:content>{esc_xml(title)}</v8:content>")
-            lines.append(f"{i}\t\t</v8:item>")
-            lines.append(f"{i}\t</dcsset:lwsTitle>")
-        for item in items:
-            lines.append(f'{i}\t<dcsset:item xsi:type="dcsset:SelectedItemField">')
-            lines.append(f"{i}\t\t<dcsset:field>{esc_xml(item)}</dcsset:field>")
-            lines.append(f"{i}\t</dcsset:item>")
-        lines.append(f"{i}\t<dcsset:placement>Auto</dcsset:placement>")
-        lines.append(f"{i}</dcsset:item>")
-        return "\r\n".join(lines)
     lines = [
         f'{i}<dcsset:item xsi:type="dcsset:SelectedItemField">',
         f"{i}\t<dcsset:field>{esc_xml(field_name)}</dcsset:field>",
@@ -903,16 +866,6 @@ def build_variant_fragment(parsed, indent):
     return "\r\n".join(lines)
 
 
-def _emit_filter_comparison(lines, f, indent):
-    lines.append(f'{indent}<dcsset:item xsi:type="dcsset:FilterItemComparison">')
-    lines.append(f'{indent}\t<dcsset:left xsi:type="dcscor:Field">{esc_xml(f["field"])}</dcsset:left>')
-    lines.append(f"{indent}\t<dcsset:comparisonType>{esc_xml(f['op'])}</dcsset:comparisonType>")
-    if f.get("value") is not None:
-        vt = f.get("valueType", "xs:string")
-        lines.append(f'{indent}\t<dcsset:right xsi:type="{vt}">{esc_xml(str(f["value"]))}</dcsset:right>')
-    lines.append(f"{indent}</dcsset:item>")
-
-
 def build_conditional_appearance_item_fragment(parsed, indent):
     i = indent
     lines = [f"{i}<dcsset:item>"]
@@ -928,17 +881,15 @@ def build_conditional_appearance_item_fragment(parsed, indent):
         lines.append(f"{i}\t<dcsset:selection/>")
 
     if parsed.get("filter"):
-        flt = parsed["filter"]
+        f = parsed["filter"]
         lines.append(f"{i}\t<dcsset:filter>")
-        if isinstance(flt, list):
-            # OrGroup
-            lines.append(f'{i}\t\t<dcsset:item xsi:type="dcsset:FilterItemGroup">')
-            lines.append(f"{i}\t\t\t<dcsset:groupType>OrGroup</dcsset:groupType>")
-            for f in flt:
-                _emit_filter_comparison(lines, f, f"{i}\t\t\t")
-            lines.append(f"{i}\t\t</dcsset:item>")
-        else:
-            _emit_filter_comparison(lines, flt, f"{i}\t\t")
+        lines.append(f'{i}\t\t<dcsset:item xsi:type="dcsset:FilterItemComparison">')
+        lines.append(f'{i}\t\t\t<dcsset:left xsi:type="dcscor:Field">{esc_xml(f["field"])}</dcsset:left>')
+        lines.append(f"{i}\t\t\t<dcsset:comparisonType>{esc_xml(f['op'])}</dcsset:comparisonType>")
+        if f.get("value") is not None:
+            vt = f.get("valueType", "xs:string")
+            lines.append(f'{i}\t\t\t<dcsset:right xsi:type="{vt}">{esc_xml(str(f["value"]))}</dcsset:right>')
+        lines.append(f"{i}\t\t</dcsset:item>")
         lines.append(f"{i}\t</dcsset:filter>")
     else:
         lines.append(f"{i}\t<dcsset:filter/>")
@@ -946,23 +897,15 @@ def build_conditional_appearance_item_fragment(parsed, indent):
     # appearance
     lines.append(f"{i}\t<dcsset:appearance>")
     val = parsed["value"]
+    val_type = "xs:string"
+    if re.match(r'^(web|style|win):', val):
+        val_type = "v8ui:Color"
+    elif val in ("true", "false"):
+        val_type = "xs:boolean"
+
     lines.append(f'{i}\t\t<dcscor:item xsi:type="dcsset:SettingsParameterValue">')
     lines.append(f"{i}\t\t\t<dcscor:parameter>{esc_xml(parsed['param'])}</dcscor:parameter>")
-
-    if re.match(r'^(web|style|win):', val):
-        lines.append(f'{i}\t\t\t<dcscor:value xsi:type="v8ui:Color">{esc_xml(val)}</dcscor:value>')
-    elif val in ("true", "false"):
-        lines.append(f'{i}\t\t\t<dcscor:value xsi:type="xs:boolean">{esc_xml(val)}</dcscor:value>')
-    elif parsed["param"] in ("Формат", "Текст", "Заголовок"):
-        lines.append(f'{i}\t\t\t<dcscor:value xsi:type="v8:LocalStringType">')
-        lines.append(f"{i}\t\t\t\t<v8:item>")
-        lines.append(f"{i}\t\t\t\t\t<v8:lang>ru</v8:lang>")
-        lines.append(f"{i}\t\t\t\t\t<v8:content>{esc_xml(val)}</v8:content>")
-        lines.append(f"{i}\t\t\t\t</v8:item>")
-        lines.append(f"{i}\t\t\t</dcscor:value>")
-    else:
-        lines.append(f'{i}\t\t\t<dcscor:value xsi:type="xs:string">{esc_xml(val)}</dcscor:value>')
-
+    lines.append(f'{i}\t\t\t<dcscor:value xsi:type="{val_type}">{esc_xml(val)}</dcscor:value>')
     lines.append(f"{i}\t\t</dcscor:item>")
     lines.append(f"{i}\t</dcsset:appearance>")
 
@@ -973,9 +916,6 @@ def build_conditional_appearance_item_fragment(parsed, indent):
 def build_structure_item_fragment(item, indent):
     i = indent
     lines = [f'{i}<dcsset:item xsi:type="dcsset:StructureItemGroup">']
-
-    if item.get("name"):
-        lines.append(f"{i}\t<dcsset:name>{esc_xml(item['name'])}</dcsset:name>")
 
     group_by = item.get("groupBy", [])
     if not group_by:
@@ -1225,7 +1165,7 @@ def resolve_variant_settings():
                             break
                 if sv:
                     break
-        if sv is None:
+        if not sv:
             print(f"Variant '{variant_arg}' not found", file=sys.stderr)
             sys.exit(1)
     else:
@@ -1233,7 +1173,7 @@ def resolve_variant_settings():
             if isinstance(child.tag, str) and local_name(child) == "settingsVariant" and etree.QName(child.tag).namespace == SCH_NS:
                 sv = child
                 break
-        if sv is None:
+        if not sv:
             print("No settingsVariant found in DCS", file=sys.stderr)
             sys.exit(1)
 
@@ -1312,8 +1252,6 @@ xml_doc = tree.getroot()
 
 if operation in ("set-query", "set-structure", "add-dataSet"):
     values = [value_arg]
-elif operation == "patch-query":
-    values = [v for v in value_arg.split(";;") if v.strip()]
 else:
     values = [v.strip() for v in value_arg.split(";;") if v.strip()]
 
@@ -1468,81 +1406,6 @@ elif operation == "add-parameter":
         if parsed.get("autoDates"):
             print('[OK] Auto-parameters "\u0414\u0430\u0442\u0430\u041d\u0430\u0447\u0430\u043b\u0430", "\u0414\u0430\u0442\u0430\u041e\u043a\u043e\u043d\u0447\u0430\u043d\u0438\u044f" added')
 
-elif operation == "modify-parameter":
-    for val in values:
-        parts = val.split(None, 1)
-        param_name = parts[0].strip()
-        rest = parts[1].strip() if len(parts) > 1 else ""
-
-        param_el = find_element_by_child_value(xml_doc, "parameter", "name", param_name, SCH_NS)
-        if param_el is None:
-            print(f'[WARN] Parameter "{param_name}" not found -- skipped')
-            continue
-
-        child_indent = get_child_indent(param_el)
-
-        # Separate availableValue=... from simple kv pairs
-        simple_rest = rest
-        av_part = None
-        av_idx = rest.find("availableValue=")
-        if av_idx >= 0:
-            simple_rest = rest[:av_idx].strip()
-            av_part = rest[av_idx:]
-
-        # Process simple key=value pairs (use, denyIncompleteValues, etc.)
-        if simple_rest:
-            for m in re.finditer(r'(\w+)=(\S+)', simple_rest):
-                key, value = m.group(1), m.group(2)
-                existing = next((ch for ch in param_el if isinstance(ch.tag, str) and local_name(ch) == key), None)
-                if existing is not None:
-                    existing.text = value
-                    print(f'[OK] Parameter "{param_name}": {key} updated to {value}')
-                else:
-                    # Schema order: ...value, useRestriction, availableValue*, denyIncompleteValues, use
-                    ref_node = None
-                    if key == "denyIncompleteValues":
-                        ref_node = next((ch for ch in param_el if isinstance(ch.tag, str) and local_name(ch) == "use"), None)
-                    frag_xml = f"{child_indent}<{key}>{esc_xml(value)}</{key}>"
-                    nodes = import_fragment(xml_doc, frag_xml)
-                    for node in nodes:
-                        insert_before_element(param_el, node, ref_node, child_indent)
-                    print(f'[OK] Parameter "{param_name}": {key}={value} added')
-
-        # Process availableValue
-        if av_part:
-            av_rest = av_part[len("availableValue="):]
-            # Parse: "Перечисление...X presentation=текст с пробелами"
-            av_parts = re.split(r'\s+presentation=', av_rest, 1)
-            av_value = av_parts[0].strip()
-            av_presentation = av_parts[1].strip() if len(av_parts) > 1 else ""
-
-            av_type = "xs:string"
-            if re.match(r'^(Перечисление|Справочник|ПланСчетов|Документ|ПланВидовХарактеристик|ПланВидовРасчета)\.', av_value):
-                av_type = "dcscor:DesignTimeValue"
-
-            av_lines = [f"{child_indent}<availableValue>"]
-            av_lines.append(f'{child_indent}\t<value xsi:type="{av_type}">{esc_xml(av_value)}</value>')
-            if av_presentation:
-                av_lines.append(f'{child_indent}\t<presentation xsi:type="v8:LocalStringType">')
-                av_lines.append(f"{child_indent}\t\t<v8:item>")
-                av_lines.append(f"{child_indent}\t\t\t<v8:lang>ru</v8:lang>")
-                av_lines.append(f"{child_indent}\t\t\t<v8:content>{esc_xml(av_presentation)}</v8:content>")
-                av_lines.append(f"{child_indent}\t\t</v8:item>")
-                av_lines.append(f"{child_indent}\t</presentation>")
-            av_lines.append(f"{child_indent}</availableValue>")
-            frag_xml = "\r\n".join(av_lines)
-
-            # Insert before first of (denyIncompleteValues, use) in document order
-            ref_node = None
-            for child in param_el:
-                if isinstance(child.tag, str) and local_name(child) in ("denyIncompleteValues", "use"):
-                    ref_node = child
-                    break
-            nodes = import_fragment(xml_doc, frag_xml)
-            for node in nodes:
-                insert_before_element(param_el, node, ref_node, child_indent)
-            print(f'[OK] Parameter "{param_name}": availableValue added')
-
 elif operation == "add-filter":
     settings = resolve_variant_settings()
     var_name = get_variant_name()
@@ -1607,38 +1470,13 @@ elif operation == "add-selection":
     var_name = get_variant_name()
     for val in values:
         field_name = val.strip()
-        group_name = None
-
-        # Extract @group=Name
-        gm = re.search(r'\s*@group=(\S+)', field_name)
-        if gm:
-            group_name = gm.group(1)
-            field_name = re.sub(r'\s*@group=\S+', '', field_name).strip()
-
-        if group_name:
-            # Find named StructureItemGroup
-            target_el = None
-            for item in settings.iter(f"{{{SET_NS}}}item"):
-                xsi_type = item.get(f"{{{XSI_NS}}}type", "")
-                if "StructureItemGroup" in xsi_type:
-                    name_el = item.find(f"{{{SET_NS}}}name")
-                    if name_el is not None and name_el.text == group_name:
-                        target_el = item
-                        break
-            if target_el is None:
-                print(f'[WARN] StructureItemGroup "{group_name}" not found -- adding to variant level')
-                target_el = settings
-        else:
-            target_el = settings
-
-        selection = ensure_settings_child(target_el, "selection", [])
+        selection = ensure_settings_child(settings, "selection", [])
         sel_indent = get_container_child_indent(selection)
         sel_xml = build_selection_item_fragment(field_name, sel_indent)
         sel_nodes = import_fragment(xml_doc, sel_xml)
         for node in sel_nodes:
             insert_before_element(selection, node, None, sel_indent)
-        target = f'group "{group_name}"' if group_name else f'variant "{var_name}"'
-        print(f'[OK] Selection "{field_name}" added to {target}')
+        print(f'[OK] Selection "{field_name}" added to variant "{var_name}"')
 
 elif operation == "set-query":
     ds_node = resolve_data_set()
@@ -1649,27 +1487,6 @@ elif operation == "set-query":
         sys.exit(1)
     query_el.text = resolve_query_value(value_arg, query_base_dir)
     print(f'[OK] Query replaced in dataset "{ds_name}"')
-
-elif operation == "patch-query":
-    ds_node = resolve_data_set()
-    ds_name = get_data_set_name(ds_node)
-    query_el = find_first_element(ds_node, ["query"], SCH_NS)
-    if query_el is None:
-        print(f"No <query> element found in dataset '{ds_name}'", file=sys.stderr)
-        sys.exit(1)
-    for val in values:
-        sep_idx = val.find(" => ")
-        if sep_idx < 0:
-            print("patch-query value must contain ' => ' separator: old => new", file=sys.stderr)
-            sys.exit(1)
-        old_str = val[:sep_idx]
-        new_str = val[sep_idx + 4:]
-        query_text = query_el.text or ""
-        if old_str not in query_text:
-            print(f"Substring not found in query of dataset '{ds_name}': {old_str}", file=sys.stderr)
-            sys.exit(1)
-        query_el.text = query_text.replace(old_str, new_str)
-        print(f'[OK] Query patched in dataset "{ds_name}": replaced \'{old_str}\'')
 
 elif operation == "set-outputParameter":
     settings = resolve_variant_settings()
@@ -1836,11 +1653,7 @@ elif operation == "add-conditionalAppearance":
 
         desc = f"{parsed['param']} = {parsed['value']}"
         if parsed.get("filter"):
-            flt = parsed["filter"]
-            if isinstance(flt, list):
-                desc += f" when OrGroup({len(flt)} conditions)"
-            else:
-                desc += f" when {flt['field']} {flt['op']}"
+            desc += f" when {parsed['filter']['field']} {parsed['filter']['op']}"
         if parsed.get("fields"):
             desc += f" for {', '.join(parsed['fields'])}"
         print(f'[OK] ConditionalAppearance "{desc}" added to variant "{var_name}"')

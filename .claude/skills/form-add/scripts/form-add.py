@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-# form-add v1.3 — Add managed form to 1C config object
+# form-add v1.2 — Add managed form to 1C config object
 # Source: https://github.com/Nikolay-Shirokov/cc-1c-skills
 
 import argparse
 import os
-import re
 import sys
 import uuid
 
@@ -14,22 +13,6 @@ NSMAP = {
     "md": "http://v8.1c.ru/8.3/MDClasses",
     "v8": "http://v8.1c.ru/8.1/data/core",
 }
-
-
-def detect_format_version(d):
-    while d:
-        cfg_path = os.path.join(d, "Configuration.xml")
-        if os.path.isfile(cfg_path):
-            with open(cfg_path, "r", encoding="utf-8-sig") as f:
-                head = f.read(2000)
-            m = re.search(r'<MetaDataObject[^>]+version="(\d+\.\d+)"', head)
-            if m:
-                return m.group(1)
-        parent = os.path.dirname(d)
-        if parent == d:
-            break
-        d = parent
-    return "2.17"
 
 
 def save_xml_with_bom(tree, path):
@@ -84,8 +67,6 @@ def main():
         sys.exit(1)
 
     object_xml_full = os.path.abspath(object_path)
-    format_version = detect_format_version(os.path.dirname(object_xml_full))
-
     parser_xml = etree.XMLParser(remove_blank_text=False)
     tree = etree.parse(object_xml_full, parser_xml)
     root = tree.getroot()
@@ -190,7 +171,7 @@ def main():
         ' xmlns:xr="http://v8.1c.ru/8.3/xcf/readable"'
         ' xmlns:xs="http://www.w3.org/2001/XMLSchema"'
         ' xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"'
-        f' version="{format_version}">\n'
+        ' version="2.17">\n'
         f'\t<Form uuid="{form_uuid}">\n'
         '\t\t<Properties>\n'
         f'\t\t\t<Name>{form_name}</Name>\n'
@@ -244,7 +225,7 @@ def main():
 
         form_xml = (
             f'<?xml version="1.0" encoding="UTF-8"?>\n'
-            f'<Form {form_ns_decl} version="{format_version}">\n'
+            f'<Form {form_ns_decl} version="2.17">\n'
             '\t<AutoCommandBar name="\u0424\u043e\u0440\u043c\u0430\u041a\u043e\u043c\u0430\u043d\u0434\u043d\u0430\u044f\u041f\u0430\u043d\u0435\u043b\u044c" id="-1">\n'
             '\t\t<Autofill>true</Autofill>\n'
             '\t</AutoCommandBar>\n'
@@ -273,7 +254,7 @@ def main():
 
         form_xml = (
             f'<?xml version="1.0" encoding="UTF-8"?>\n'
-            f'<Form {form_ns_decl} version="{format_version}">\n'
+            f'<Form {form_ns_decl} version="2.17">\n'
             '\t<AutoCommandBar name="\u0424\u043e\u0440\u043c\u0430\u041a\u043e\u043c\u0430\u043d\u0434\u043d\u0430\u044f\u041f\u0430\u043d\u0435\u043b\u044c" id="-1">\n'
             '\t\t<Autofill>true</Autofill>\n'
             '\t</AutoCommandBar>\n'
@@ -316,7 +297,7 @@ def main():
 
         form_xml = (
             f'<?xml version="1.0" encoding="UTF-8"?>\n'
-            f'<Form {form_ns_decl} version="{format_version}">\n'
+            f'<Form {form_ns_decl} version="2.17">\n'
             '\t<AutoCommandBar name="\u0424\u043e\u0440\u043c\u0430\u041a\u043e\u043c\u0430\u043d\u0434\u043d\u0430\u044f\u041f\u0430\u043d\u0435\u043b\u044c" id="-1">\n'
             '\t\t<Autofill>true</Autofill>\n'
             '\t</AutoCommandBar>\n'
@@ -385,47 +366,54 @@ def main():
         print(f"Не найден элемент ChildObjects в {object_path}", file=sys.stderr)
         sys.exit(1)
 
-    # Add <Form>$FormName</Form>
-    form_elem = etree.Element(f"{{{ns}}}Form")
-    form_elem.text = form_name
+    # Check for duplicate before adding
+    existing_forms = child_objects.findall("md:Form", NSMAP)
+    form_already_registered = any(ef.text == form_name for ef in existing_forms)
 
-    # Find first <Template> to insert before it
-    first_template = child_objects.find("md:Template", NSMAP)
-    # Find first <TabularSection> to insert before it (if no Template)
-    first_tabular = child_objects.find("md:TabularSection", NSMAP)
-
-    # Determine insertion point: before Template, before TabularSection, or at end
-    insert_before = None
-    if first_template is not None:
-        insert_before = first_template
-    elif first_tabular is not None:
-        insert_before = first_tabular
-
-    if insert_before is not None:
-        # Insert before the found element
-        idx = list(child_objects).index(insert_before)
-        child_objects.insert(idx, form_elem)
-        # Whitespace: form_elem gets "\n\t\t\t" as tail (indent before insert_before)
-        form_elem.tail = "\n\t\t\t"
+    if form_already_registered:
+        print(f"[SKIP] Form '{form_name}' already registered in ChildObjects — not adding duplicate")
     else:
-        # Add to end of ChildObjects
-        children = list(child_objects)
-        if len(children) == 0 and (child_objects.text is None or child_objects.text.strip() == ""):
-            # Empty ChildObjects (self-closing)
-            child_objects.text = "\n\t\t\t"
-            child_objects.append(form_elem)
-            form_elem.tail = "\n\t\t"
+        # Add <Form>$FormName</Form>
+        form_elem = etree.Element(f"{{{ns}}}Form")
+        form_elem.text = form_name
+
+        # Find first <Template> to insert before it
+        first_template = child_objects.find("md:Template", NSMAP)
+        # Find first <TabularSection> to insert before it (if no Template)
+        first_tabular = child_objects.find("md:TabularSection", NSMAP)
+
+        # Determine insertion point: before Template, before TabularSection, or at end
+        insert_before = None
+        if first_template is not None:
+            insert_before = first_template
+        elif first_tabular is not None:
+            insert_before = first_tabular
+
+        if insert_before is not None:
+            # Insert before the found element
+            idx = list(child_objects).index(insert_before)
+            child_objects.insert(idx, form_elem)
+            # Whitespace: form_elem gets "\n\t\t\t" as tail (indent before insert_before)
+            form_elem.tail = "\n\t\t\t"
         else:
-            if len(children) > 0:
-                last_child = children[-1]
-                old_tail = last_child.tail
-                last_child.tail = "\n\t\t\t"
-                child_objects.append(form_elem)
-                form_elem.tail = old_tail if old_tail else "\n\t\t"
-            else:
-                child_objects.text = (child_objects.text or "") + "\n\t\t\t"
+            # Add to end of ChildObjects
+            children = list(child_objects)
+            if len(children) == 0 and (child_objects.text is None or child_objects.text.strip() == ""):
+                # Empty ChildObjects (self-closing)
+                child_objects.text = "\n\t\t\t"
                 child_objects.append(form_elem)
                 form_elem.tail = "\n\t\t"
+            else:
+                if len(children) > 0:
+                    last_child = children[-1]
+                    old_tail = last_child.tail
+                    last_child.tail = "\n\t\t\t"
+                    child_objects.append(form_elem)
+                    form_elem.tail = old_tail if old_tail else "\n\t\t"
+                else:
+                    child_objects.text = (child_objects.text or "") + "\n\t\t\t"
+                    child_objects.append(form_elem)
+                    form_elem.tail = "\n\t\t"
 
     # --- SetDefault ---
 

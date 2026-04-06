@@ -97,31 +97,7 @@ powershell.exe -NoProfile -File .claude/skills/skd-compile/scripts/skd-compile.p
 ]
 ```
 
-Флаги shorthand:
-- `@autoDates` — автоматически генерирует параметры `ДатаНачала` и `ДатаОкончания` с выражениями `&Период.ДатаНачала` / `&Период.ДатаОкончания` и `availableAsField=false`
-- `@valueList` — `<valueListAllowed>true</valueListAllowed>` — разрешает передавать список значений
-- `@hidden` — скрытый параметр: `availableAsField=false` + исключается из `"dataParameters": "auto"`
-
-Объектная форма: `hidden: true`, `valueListAllowed: true`, `availableAsField: false`, `denyIncompleteValues: true`, `use: "Always"`.
-
-Список допустимых значений (availableValues):
-
-```json
-{
-  "name": "ПорядокОкругления",
-  "type": "EnumRef.Округления",
-  "value": "Перечисление.Округления.Окр1_00",
-  "use": "Always",
-  "denyIncompleteValues": true,
-  "availableValues": [
-    {"value": "Перечисление.Округления.Окр1_00", "presentation": "руб. коп"},
-    {"value": "Перечисление.Округления.Окр1", "presentation": "руб."},
-    {"value": "Перечисление.Округления.Окр1000", "presentation": "тыс. руб"}
-  ]
-}
-```
-
-В варианте настроек `"dataParameters": "auto"` автоматически генерирует записи для всех не-hidden параметров с `userSettingID`.
+`@autoDates` — автоматически генерирует параметры `ДатаНачала` и `ДатаОкончания` с выражениями `&Период.ДатаНачала` / `&Период.ДатаОкончания` и `availableAsField=false`. Заменяет 5 строк на 1.
 
 ### Фильтры — shorthand
 
@@ -211,13 +187,7 @@ powershell.exe -NoProfile -File .claude/skills/skd-compile/scripts/skd-compile.p
 ]
 ```
 
-Типы значений appearance: `style:XXX`/`web:XXX`/`win:XXX` → Color, `true`/`false` → Boolean, параметр `Формат`/`Текст`/`Заголовок` → LocalStringType, прочее → String.
-
-Типы значений фильтра: `Перечисление.*`/`Справочник.*`/`ПланСчетов.*`/`Документ.*` → DesignTimeValue (автодетект).
-
-OrGroup в фильтре: `{"group": "Or", "items": ["условие1", "условие2"]}`.
-
-Folder в selection: `{"folder": "Поступление", "items": ["ПолеА", "ПолеБ"]}` → SelectedItemFolder с lwsTitle и placement=Auto.
+Типы значений appearance: `style:XXX`/`web:XXX`/`win:XXX` → Color, `true`/`false` → Boolean, параметр `Текст` → LocalStringType, прочее → String.
 
 ### Итоги с привязкой к группировкам
 
@@ -257,16 +227,7 @@ Folder в selection: `{"folder": "Поступление", "items": ["ПолеА
 ]
 ```
 
-Синтаксис ячеек: `"текст"` — статика, `"{Имя}"` — параметр, `"|"` — объединение с ячейкой выше, `">"` — объединение с ячейкой слева, `null` — пустая.
-
-Двухуровневая шапка с горизонтальным объединением:
-```json
-"rows": [
-  ["Вид актива", "Остаток начало", "Поступление", ">", ">", ">", "Выбытие", ">", ">", "Остаток конец"],
-  ["|",          "|",              "из произв.",   "из п/ф", "со сч.40", "прочее", "Реализ.", "отгруж.", "прочее", "|"],
-  ["К1",         "К2",             "К3",           "К4",     "К5",       "К6",     "К7",      "К8",      "К9",     "К10"]
-]
-```
+Синтаксис ячеек: `"текст"` — статика, `"{Имя}"` — параметр, `"|"` — объединение с ячейкой выше, `null` — пустая.
 
 Встроенные стили: `header` (фон, центр, перенос), `data` (фон группы), `subheader` (без фона, центр), `total` (без фона). Все — Arial 10, рамки Solid 1px, цвета через стили платформы.
 
@@ -274,31 +235,14 @@ Folder в selection: `{"folder": "Поступление", "items": ["ПолеА
 
 Raw XML (`"template": "<...>"`) остаётся как fallback. Детект: если есть `rows` — DSL, иначе — raw.
 
-### Расшифровка (drilldown) в параметрах шаблона
-
-Ключ `drilldown` в параметре шаблона автоматически генерирует `DetailsAreaTemplateParameter` и привязку `Расшифровка` в appearance ячеек:
-
-```json
-"parameters": [
-  { "name": "Сырье", "expression": "ПоступлениеСырья", "drilldown": "ПоступлениеСырья" }
-]
-```
-
-Генерирует: `ExpressionAreaTemplateParameter` (обычный) + `DetailsAreaTemplateParameter` с именем `Расшифровка_ПоступлениеСырья`, `fieldExpression` по полю `ИмяРесурса`, `mainAction=DrillDown`. Ячейки `{Сырье}` автоматически получают appearance `Расшифровка = Расшифровка_ПоступлениеСырья`.
-
 ### Привязки макетов к группировкам
 
 ```json
 "groupTemplates": [
-  { "groupName": "ДанныеОтчета", "templateType": "GroupHeader", "template": "Макет1" },
-  { "groupField": "Счет", "templateType": "Header", "template": "Макет2" },
-  { "groupField": "Счет", "templateType": "OverallHeader", "template": "Макет3" }
+  { "groupField": "Счет", "templateType": "GroupHeader", "template": "Макет1" },
+  { "groupField": "Счет", "templateType": "Header", "template": "Макет2" }
 ]
 ```
-
-`groupField` — привязка к полю группировки, `groupName` — к именованной группировке в структуре варианта.
-
-`templateType`: `Header` (строки данных) → `<groupTemplate>`, `OverallHeader` (итоги) → `<groupTemplate>`, `GroupHeader` (шапка) → `<groupHeaderTemplate>`.
 
 ## Примеры
 

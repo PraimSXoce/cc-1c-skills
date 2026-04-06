@@ -1,4 +1,4 @@
-﻿# interface-edit v1.3 — Edit 1C CommandInterface.xml
+﻿# interface-edit v1.1 — Edit 1C CommandInterface.xml
 # Source: https://github.com/Nikolay-Shirokov/cc-1c-skills
 param(
 	[Parameter(Mandatory)][string]$CIPath,
@@ -23,25 +23,6 @@ if (-not [System.IO.Path]::IsPathRooted($CIPath)) {
 }
 $resolvedPath = $CIPath
 
-# --- Detect format version ---
-
-function Detect-FormatVersion([string]$dir) {
-	$d = $dir
-	while ($d) {
-		$cfgPath = Join-Path $d "Configuration.xml"
-		if (Test-Path $cfgPath) {
-			$head = [System.IO.File]::ReadAllText($cfgPath, [System.Text.Encoding]::UTF8).Substring(0, [Math]::Min(2000, (Get-Item $cfgPath).Length))
-			if ($head -match '<MetaDataObject[^>]+version="(\d+\.\d+)"') { return $Matches[1] }
-		}
-		$parent = Split-Path $d -Parent
-		if ($parent -eq $d) { break }
-		$d = $parent
-	}
-	return "2.17"
-}
-
-$formatVersion = Detect-FormatVersion ([System.IO.Path]::GetDirectoryName($CIPath))
-
 # --- Namespaces ---
 $script:ciNs = "http://v8.1c.ru/8.3/xcf/extrnprops"
 $script:xrNs = "http://v8.1c.ru/8.3/xcf/readable"
@@ -61,7 +42,7 @@ if (-not (Test-Path $CIPath)) {
 	xmlns:xr="$($script:xrNs)"
 	xmlns:xs="$($script:xsNs)"
 	xmlns:xsi="$($script:xsiNs)"
-	version="$formatVersion">
+	version="2.17">
 </CommandInterface>
 "@
 		$utf8Bom = New-Object System.Text.UTF8Encoding($true)
@@ -221,59 +202,9 @@ function Find-CommandByName($section, [string]$cmdName) {
 	return $null
 }
 
-# --- Command name normalization (plural/Russian type prefix → singular English) ---
-$script:typeNormMap = @{
-	"Catalogs"="Catalog"; "Documents"="Document"; "Enums"="Enum"; "Constants"="Constant"
-	"Reports"="Report"; "DataProcessors"="DataProcessor"
-	"InformationRegisters"="InformationRegister"; "AccumulationRegisters"="AccumulationRegister"
-	"AccountingRegisters"="AccountingRegister"; "CalculationRegisters"="CalculationRegister"
-	"ChartsOfAccounts"="ChartOfAccounts"; "ChartsOfCharacteristicTypes"="ChartOfCharacteristicTypes"
-	"ChartsOfCalculationTypes"="ChartOfCalculationTypes"
-	"BusinessProcesses"="BusinessProcess"; "Tasks"="Task"
-	"ExchangePlans"="ExchangePlan"; "DocumentJournals"="DocumentJournal"
-	"CommonModules"="CommonModule"; "CommonCommands"="CommonCommand"
-	"CommonForms"="CommonForm"; "CommonPictures"="CommonPicture"
-	"CommonTemplates"="CommonTemplate"; "CommonAttributes"="CommonAttribute"
-	"CommandGroups"="CommandGroup"; "Roles"="Role"
-	"Subsystems"="Subsystem"; "StyleItems"="StyleItem"
-	# Russian singular
-	"Справочник"="Catalog"; "Документ"="Document"; "Перечисление"="Enum"
-	"Константа"="Constant"; "Отчёт"="Report"; "Отчет"="Report"; "Обработка"="DataProcessor"
-	"РегистрСведений"="InformationRegister"; "РегистрНакопления"="AccumulationRegister"
-	"РегистрБухгалтерии"="AccountingRegister"
-	"ПланСчетов"="ChartOfAccounts"; "ПланВидовХарактеристик"="ChartOfCharacteristicTypes"
-	"БизнесПроцесс"="BusinessProcess"; "Задача"="Task"
-	"ПланОбмена"="ExchangePlan"; "ЖурналДокументов"="DocumentJournal"
-	"ОбщийМодуль"="CommonModule"; "ОбщаяКоманда"="CommonCommand"
-	"ОбщаяФорма"="CommonForm"; "Подсистема"="Subsystem"
-	# Russian plural
-	"Справочники"="Catalog"; "Документы"="Document"; "Перечисления"="Enum"
-	"Константы"="Constant"; "Отчёты"="Report"; "Отчеты"="Report"; "Обработки"="DataProcessor"
-	"РегистрыСведений"="InformationRegister"; "РегистрыНакопления"="AccumulationRegister"
-	"РегистрыБухгалтерии"="AccountingRegister"
-	"ПланыСчетов"="ChartOfAccounts"; "ПланыВидовХарактеристик"="ChartOfCharacteristicTypes"
-	"БизнесПроцессы"="BusinessProcess"; "Задачи"="Task"
-	"ПланыОбмена"="ExchangePlan"; "ЖурналыДокументов"="DocumentJournal"
-	"Подсистемы"="Subsystem"
-}
-
-function Normalize-CmdName([string]$name) {
-	if (-not $name -or -not $name.Contains('.')) { return $name }
-	$dotIdx = $name.IndexOf('.')
-	$first = $name.Substring(0, $dotIdx)
-	$rest = $name.Substring($dotIdx)
-	if ($script:typeNormMap.ContainsKey($first)) {
-		$normalized = "$($script:typeNormMap[$first])$rest"
-		if ($normalized -ne $name) { Write-Host "[NORM] Command: $name -> $normalized" }
-		return $normalized
-	}
-	return $name
-}
-
 # --- Operations ---
 
 function Do-Hide([string[]]$commands) {
-	$commands = @($commands | ForEach-Object { Normalize-CmdName $_ })
 	$section = Ensure-Section "CommandsVisibility"
 	$sectionIndent = Get-ChildIndent $section
 
@@ -313,7 +244,6 @@ function Do-Hide([string[]]$commands) {
 }
 
 function Do-Show([string[]]$commands) {
-	$commands = @($commands | ForEach-Object { Normalize-CmdName $_ })
 	$section = $null
 	foreach ($child in $root.ChildNodes) {
 		if ($child.NodeType -eq 'Element' -and $child.LocalName -eq "CommandsVisibility") {
@@ -362,7 +292,7 @@ function Do-Show([string[]]$commands) {
 
 function Do-Place([string]$jsonVal) {
 	$def = $jsonVal | ConvertFrom-Json
-	$cmdName = Normalize-CmdName "$($def.command)"
+	$cmdName = "$($def.command)"
 	$groupName = "$($def.group)"
 	if (-not $cmdName -or -not $groupName) { Write-Error "place requires {command, group}"; exit 1 }
 
@@ -396,7 +326,7 @@ function Do-Place([string]$jsonVal) {
 function Do-Order([string]$jsonVal) {
 	$def = $jsonVal | ConvertFrom-Json
 	$groupName = "$($def.group)"
-	$commands = @($def.commands | ForEach-Object { Normalize-CmdName "$_" })
+	$commands = @($def.commands | ForEach-Object { "$_" })
 	if (-not $groupName -or $commands.Count -eq 0) { Write-Error "order requires {group, commands:[...]}"; exit 1 }
 
 	$section = Ensure-Section "CommandsOrder"

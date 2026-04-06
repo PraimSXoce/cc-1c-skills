@@ -155,8 +155,6 @@ const form = await getFormState();
 
 **confirmation** — if present, a Yes/No dialog is shown. Call `clickElement('Да')` or `clickElement('Нет')`.
 
-**errors.stateText** — array of SpreadsheetDocument state messages (e.g. `"Не установлено значение параметра \"X\""`, `"Отчет не сформирован..."`, `"Изменились настройки..."`). Present when the report area shows an info bar instead of data.
-
 ### Reading data
 
 #### `readTable({ maxRows?, offset?, table? })` → `{ columns, rows, total, shown, offset }`
@@ -241,24 +239,6 @@ Click button, hyperlink, tab, navigation panel link, or grid row (fuzzy match).
   // Verify selection:
   const t = await readTable();
   t.rows.filter(r => r._selected);  // rows with _selected: true
-  ```
-- **SpreadsheetDocument cells** (report drill-down): first argument can be `{ row, column }` object to click a cell in a rendered report. Coordinates match `readSpreadsheet()` output:
-  ```js
-  const report = await readSpreadsheet();
-  // report.data[0] = { 'К1': 'Материалы строительные', 'К6': '150 000', ... }
-
-  // By data row index + column header name
-  await clickElement({ row: 0, column: 'К6' }, { dblclick: true });
-
-  // By cell value filter (fuzzy match)
-  await clickElement({ row: { 'К1': 'Материалы' }, column: 'К6' }, { dblclick: true });
-
-  // Totals row
-  await clickElement({ row: 'totals', column: 'К6' }, { dblclick: true });
-  ```
-  Text search also works as fallback — searches inside spreadsheet iframes:
-  ```js
-  await clickElement('150 000', { dblclick: true }); // finds cell by text in report
   ```
 
 #### `fillFields({ name: value })` → `{ filled, form }`
@@ -430,23 +410,6 @@ console.log('Title:', report.title);
 console.log('Data rows:', report.data?.length);
 ```
 
-### Drill-down report cells
-
-```js
-// Generate report
-await clickElement('Сформировать');
-await wait(5);
-const report = await readSpreadsheet();
-
-// Double-click cell to open drill-down (uses coordinates from readSpreadsheet)
-await clickElement({ row: 0, column: 'К6' }, { dblclick: true });
-// Modal dialog "Выбор поля" opens
-await clickElement('Регистратор');
-await clickElement('Выбрать');
-await wait(10);
-const drilldown = await readSpreadsheet();
-```
-
 ### Work with multi-grid forms
 
 Some forms have multiple grids (e.g. "Входящие" and "Исходящие" tables on a single form). Without `table`, buttons like "Добавить" hit the first match and `readTable` reads the first grid — which may not be the one you need.
@@ -478,12 +441,7 @@ await deleteTableRow(0, { table: 'Исходящие' });
 
 Table matching accepts both technical name (`tables[].name`) and visual label (`tables[].label`). Label is the group title shown on screen — useful when working from screenshots. Name match takes priority over label match.
 
-### Keyboard shortcuts
-
-```js
-const page = await getPage();
-await page.keyboard.press('F8');  // example: create new item in focused reference field
-```
+### Keyboard shortcuts (via `page.keyboard.press`)
 
 | Key | Context | Action |
 |-----|---------|--------|

@@ -1,30 +1,13 @@
 #!/usr/bin/env python3
-# interface-edit v1.3 — Edit 1C CommandInterface.xml
+# interface-edit v1.1 — Edit 1C CommandInterface.xml
 # Source: https://github.com/Nikolay-Shirokov/cc-1c-skills
 
 import argparse
 import json
 import os
-import re
 import subprocess
 import sys
 from lxml import etree
-
-def detect_format_version(d):
-    while d:
-        cfg_path = os.path.join(d, "Configuration.xml")
-        if os.path.isfile(cfg_path):
-            with open(cfg_path, "r", encoding="utf-8-sig") as f:
-                head = f.read(2000)
-            m = re.search(r'<MetaDataObject[^>]+version="(\d+\.\d+)"', head)
-            if m:
-                return m.group(1)
-        parent = os.path.dirname(d)
-        if parent == d:
-            break
-        d = parent
-    return "2.17"
-
 
 CI_NS = "http://v8.1c.ru/8.3/xcf/extrnprops"
 XR_NS = "http://v8.1c.ru/8.3/xcf/readable"
@@ -120,56 +103,6 @@ def save_xml_bom(tree, path):
         f.write(xml_bytes)
 
 
-TYPE_NORM_MAP = {
-    'Catalogs': 'Catalog', 'Documents': 'Document', 'Enums': 'Enum',
-    'Constants': 'Constant', 'Reports': 'Report', 'DataProcessors': 'DataProcessor',
-    'InformationRegisters': 'InformationRegister', 'AccumulationRegisters': 'AccumulationRegister',
-    'AccountingRegisters': 'AccountingRegister', 'CalculationRegisters': 'CalculationRegister',
-    'ChartsOfAccounts': 'ChartOfAccounts', 'ChartsOfCharacteristicTypes': 'ChartOfCharacteristicTypes',
-    'ChartsOfCalculationTypes': 'ChartOfCalculationTypes',
-    'BusinessProcesses': 'BusinessProcess', 'Tasks': 'Task',
-    'ExchangePlans': 'ExchangePlan', 'DocumentJournals': 'DocumentJournal',
-    'CommonModules': 'CommonModule', 'CommonCommands': 'CommonCommand',
-    'CommonForms': 'CommonForm', 'CommonPictures': 'CommonPicture',
-    'CommonTemplates': 'CommonTemplate', 'CommonAttributes': 'CommonAttribute',
-    'CommandGroups': 'CommandGroup', 'Roles': 'Role',
-    'Subsystems': 'Subsystem', 'StyleItems': 'StyleItem',
-    # Russian singular
-    'Справочник': 'Catalog', 'Документ': 'Document', 'Перечисление': 'Enum',
-    'Константа': 'Constant', 'Отчёт': 'Report', 'Отчет': 'Report', 'Обработка': 'DataProcessor',
-    'РегистрСведений': 'InformationRegister', 'РегистрНакопления': 'AccumulationRegister',
-    'РегистрБухгалтерии': 'AccountingRegister',
-    'ПланСчетов': 'ChartOfAccounts', 'ПланВидовХарактеристик': 'ChartOfCharacteristicTypes',
-    'БизнесПроцесс': 'BusinessProcess', 'Задача': 'Task',
-    'ПланОбмена': 'ExchangePlan', 'ЖурналДокументов': 'DocumentJournal',
-    'ОбщийМодуль': 'CommonModule', 'ОбщаяКоманда': 'CommonCommand',
-    'ОбщаяФорма': 'CommonForm', 'Подсистема': 'Subsystem',
-    # Russian plural
-    'Справочники': 'Catalog', 'Документы': 'Document', 'Перечисления': 'Enum',
-    'Константы': 'Constant', 'Отчёты': 'Report', 'Отчеты': 'Report', 'Обработки': 'DataProcessor',
-    'РегистрыСведений': 'InformationRegister', 'РегистрыНакопления': 'AccumulationRegister',
-    'РегистрыБухгалтерии': 'AccountingRegister',
-    'ПланыСчетов': 'ChartOfAccounts', 'ПланыВидовХарактеристик': 'ChartOfCharacteristicTypes',
-    'БизнесПроцессы': 'BusinessProcess', 'Задачи': 'Task',
-    'ПланыОбмена': 'ExchangePlan', 'ЖурналыДокументов': 'DocumentJournal',
-    'Подсистемы': 'Subsystem',
-}
-
-
-def normalize_cmd_name(name):
-    if not name or '.' not in name:
-        return name
-    dot_idx = name.index('.')
-    first = name[:dot_idx]
-    rest = name[dot_idx:]
-    if first in TYPE_NORM_MAP:
-        normalized = TYPE_NORM_MAP[first] + rest
-        if normalized != name:
-            print(f'[NORM] Command: {name} -> {normalized}')
-        return normalized
-    return name
-
-
 def find_command_by_name(section, cmd_name):
     for child in section:
         if isinstance(child.tag, str) and localname(child) == "Command":
@@ -198,10 +131,6 @@ def main():
         print("Either -DefinitionFile or -Operation is required", file=sys.stderr)
         sys.exit(1)
 
-    # --- Detect format version ---
-    ci_dir = os.path.dirname(os.path.abspath(args.CIPath))
-    format_version = detect_format_version(ci_dir)
-
     # --- Resolve path ---
     ci_path = args.CIPath
     if not os.path.isabs(ci_path):
@@ -220,7 +149,7 @@ def main():
                 f'\txmlns:xr="{XR_NS}"\n'
                 f'\txmlns:xs="{XS_NS}"\n'
                 f'\txmlns:xsi="{XSI_NS}"\n'
-                f'\tversion="{format_version}">\n'
+                f'\tversion="2.17">\n'
                 f'</CommandInterface>'
             )
             with open(ci_path, "w", encoding="utf-8-sig") as fh:
@@ -278,7 +207,6 @@ def main():
 
     def do_hide(commands):
         nonlocal add_count, modify_count
-        commands = [normalize_cmd_name(c) for c in commands]
         section = ensure_section("CommandsVisibility")
         section_indent = get_child_indent(section)
 
@@ -310,7 +238,6 @@ def main():
 
     def do_show(commands):
         nonlocal add_count, modify_count
-        commands = [normalize_cmd_name(c) for c in commands]
         section = None
         for child in root:
             if isinstance(child.tag, str) and localname(child) == "CommandsVisibility":
@@ -350,7 +277,7 @@ def main():
     def do_place(json_val):
         nonlocal add_count, modify_count
         defn = json_val if isinstance(json_val, dict) else json.loads(json_val)
-        cmd_name = normalize_cmd_name(str(defn["command"]))
+        cmd_name = str(defn["command"])
         group_name = str(defn["group"])
         if not cmd_name or not group_name:
             print("place requires {command, group}", file=sys.stderr)
@@ -379,7 +306,7 @@ def main():
         nonlocal add_count, remove_count
         defn = json_val if isinstance(json_val, dict) else json.loads(json_val)
         group_name = str(defn["group"])
-        commands = [normalize_cmd_name(str(c)) for c in defn["commands"]]
+        commands = [str(c) for c in defn["commands"]]
         if not group_name or not commands:
             print("order requires {group, commands:[...]}", file=sys.stderr)
             sys.exit(1)

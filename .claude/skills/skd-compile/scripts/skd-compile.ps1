@@ -1,4 +1,4 @@
-﻿# skd-compile v1.7 — Compile 1C DCS from JSON
+﻿# skd-compile v1.3 — Compile 1C DCS from JSON
 # Source: https://github.com/Nikolay-Shirokov/cc-1c-skills
 param(
 	[string]$DefinitionFile,
@@ -322,18 +322,6 @@ function Parse-ParamShorthand {
 		$s = $s -replace '\s*@autoDates', ''
 	}
 
-	# Extract @valueList flag
-	if ($s -match '@valueList') {
-		$result.valueListAllowed = $true
-		$s = $s -replace '\s*@valueList', ''
-	}
-
-	# Extract @hidden flag
-	if ($s -match '@hidden') {
-		$result.hidden = $true
-		$s = $s -replace '\s*@hidden', ''
-	}
-
 	# Split "Name: Type = Value"
 	if ($s -match '^([^:]+):\s*(\S+)(\s*=\s*(.+))?$') {
 		$result.name = $Matches[1].Trim()
@@ -481,9 +469,6 @@ function Parse-FilterShorthand {
 			} elseif ($valPart -match '^\d+(\.\d+)?$') {
 				$result.value = $valPart
 				$result["valueType"] = "xs:decimal"
-			} elseif ($valPart -match '^(Перечисление|Справочник|ПланСчетов|Документ|ПланВидовХарактеристик|ПланВидовРасчета)\.') {
-				$result.value = $valPart
-				$result["valueType"] = "dcscor:DesignTimeValue"
 			} else {
 				$result.value = $valPart
 				$result["valueType"] = "xs:string"
@@ -761,9 +746,8 @@ function Emit-CalcFields {
 		if ($cf -is [string]) {
 			$parsed = Parse-CalcShorthand $cf
 		} else {
-			$dp = if ($cf.dataPath) { "$($cf.dataPath)" } else { "$($cf.field)" }
 			$parsed = @{
-				dataPath = $dp
+				dataPath = "$($cf.dataPath)"
 				expression = "$($cf.expression)"
 			}
 		}
@@ -860,14 +844,8 @@ function Emit-SingleParam {
 	# Value
 	Emit-ParamValue -type $parsed.type -val $parsed.value -indent "`t`t"
 
-	# Hidden implies useRestriction=true + availableAsField=false
-	if ($parsed.hidden -eq $true) {
-		$parsed.availableAsField = $false
-		$parsed.useRestriction = $true
-	}
-
 	# UseRestriction
-	if ($parsed.useRestriction -eq $true -or ($p -isnot [string] -and $p.useRestriction -eq $true)) {
+	if ($p -isnot [string] -and $p.useRestriction -eq $true) {
 		X "`t`t<useRestriction>true</useRestriction>"
 	}
 
@@ -881,38 +859,6 @@ function Emit-SingleParam {
 		X "`t`t<availableAsField>false</availableAsField>"
 	}
 
-	# ValueListAllowed
-	if ($parsed.valueListAllowed -eq $true) {
-		X "`t`t<valueListAllowed>true</valueListAllowed>"
-	}
-
-	# AvailableValues
-	if ($p -isnot [string] -and $p.availableValues) {
-		foreach ($av in $p.availableValues) {
-			$avVal = "$($av.value)"
-			$avType = "xs:string"
-			if ($avVal -match '^(Перечисление|Справочник|ПланСчетов|Документ|ПланВидовХарактеристик|ПланВидовРасчета)\.') {
-				$avType = "dcscor:DesignTimeValue"
-			}
-			X "`t`t<availableValue>"
-			X "`t`t`t<value xsi:type=`"$avType`">$(Esc-Xml $avVal)</value>"
-			if ($av.presentation) {
-				X "`t`t`t<presentation xsi:type=`"v8:LocalStringType`">"
-				X "`t`t`t`t<v8:item>"
-				X "`t`t`t`t`t<v8:lang>ru</v8:lang>"
-				X "`t`t`t`t`t<v8:content>$(Esc-Xml "$($av.presentation)")</v8:content>"
-				X "`t`t`t`t</v8:item>"
-				X "`t`t`t</presentation>"
-			}
-			X "`t`t</availableValue>"
-		}
-	}
-
-	# DenyIncompleteValues
-	if ($p -isnot [string] -and $p.denyIncompleteValues -eq $true) {
-		X "`t`t<denyIncompleteValues>true</denyIncompleteValues>"
-	}
-
 	# Use
 	if ($p -isnot [string] -and $p.use) {
 		X "`t`t<use>$(Esc-Xml "$($p.use)")</use>"
@@ -920,8 +866,6 @@ function Emit-SingleParam {
 
 	X "`t</parameter>"
 }
-
-$script:allParams = @()
 
 function Emit-Parameters {
 	if (-not $def.parameters) { return }
@@ -937,15 +881,10 @@ function Emit-Parameters {
 			}
 			if ($p.expression) { $parsed.expression = "$($p.expression)" }
 			if ($p.availableAsField -eq $false) { $parsed.availableAsField = $false }
-			if ($p.valueListAllowed -eq $true) { $parsed.valueListAllowed = $true }
-			if ($p.hidden -eq $true) { $parsed.hidden = $true }
 			if ($p.autoDates -eq $true) { $parsed.autoDates = $true }
 		}
 
 		Emit-SingleParam -p $p -parsed $parsed
-
-		# Track parameter for auto dataParameters
-		$script:allParams += @{ name = $parsed.name; hidden = [bool]$parsed.hidden; type = "$($parsed.type)"; value = $parsed.value }
 
 		# @autoDates: auto-generate ДатаНачала and ДатаОкончания
 		if ($parsed.autoDates) {
@@ -990,8 +929,6 @@ function Emit-ParamValue {
 			X "$indent<value xsi:type=`"xs:dateTime`">$(Esc-Xml $valStr)</value>"
 		} elseif ($valStr -eq "true" -or $valStr -eq "false") {
 			X "$indent<value xsi:type=`"xs:boolean`">$(Esc-Xml $valStr)</value>"
-		} elseif ($valStr -match '^(ПланСчетов|Справочник|Перечисление|Документ|ПланВидовХарактеристик|ПланВидовРасчета|БизнесПроцесс|Задача|РегистрСведений|ПланОбмена)\.' -or $valStr -match '^(ChartOfAccounts|Catalog|Enum|Document|ChartOfCharacteristicTypes|ChartOfCalculationTypes|BusinessProcess|Task|InformationRegister|ExchangePlan)\.') {
-			X "$indent<value xsi:type=`"dcscor:DesignTimeValue`">$(Esc-Xml $valStr)</value>"
 		} else {
 			X "$indent<value xsi:type=`"xs:string`">$(Esc-Xml $valStr)</value>"
 		}
@@ -1068,7 +1005,7 @@ function Emit-ColorValue {
 }
 
 function Emit-CellAppearance {
-	param($style, [double]$width = 0, [bool]$vMerge = $false, [bool]$hMerge = $false, [double]$minHeight = 0, $extraItems = @())
+	param($style, [double]$width = 0, [bool]$vMerge = $false, [double]$minHeight = 0)
 	$ind = "`t`t`t`t`t"
 	X "`t`t`t`t<dcsat:appearance>"
 	# Background color
@@ -1161,15 +1098,6 @@ function Emit-CellAppearance {
 		X "$ind`t<dcscor:value xsi:type=`"xs:boolean`">true</dcscor:value>"
 		X "$ind</dcscor:item>"
 	}
-	# Horizontal merge
-	if ($hMerge) {
-		X "$ind<dcscor:item>"
-		X "$ind`t<dcscor:parameter>ОбъединятьПоГоризонтали</dcscor:parameter>"
-		X "$ind`t<dcscor:value xsi:type=`"xs:boolean`">true</dcscor:value>"
-		X "$ind</dcscor:item>"
-	}
-	# Extra appearance items (e.g. drilldown Расшифровка)
-	foreach ($ei in $extraItems) { X $ei }
 	X "`t`t`t`t</dcsat:appearance>"
 }
 
@@ -1187,7 +1115,7 @@ function Emit-AreaTemplateDSL {
 	$minHeight = if ($t.minHeight) { [double]$t.minHeight } else { 0 }
 	$colCount = if ($widths.Count -gt 0) { $widths.Count } else { $rows[0].Count }
 
-	# Build vertical merge map: vMerge[row][col] = $true if cell is merged with above
+	# Build merge map: vMerge[row][col] = $true if cell is merged with above
 	$vMerge = @{}
 	for ($r = $rows.Count - 1; $r -ge 1; $r--) {
 		$vMerge[$r] = @{}
@@ -1200,26 +1128,6 @@ function Emit-AreaTemplateDSL {
 	}
 	if (-not $vMerge.ContainsKey(0)) { $vMerge[0] = @{} }
 
-	# Build horizontal merge map: hMerge[row][col] = $true if cell is merged with left
-	$hMerge = @{}
-	for ($r = 0; $r -lt $rows.Count; $r++) {
-		$hMerge[$r] = @{}
-		for ($c = 0; $c -lt $colCount; $c++) {
-			$cellVal = $rows[$r][$c]
-			if ($cellVal -is [string] -and $cellVal -eq '>') {
-				$hMerge[$r][$c] = $true
-			}
-		}
-	}
-
-	# Build drilldown map: param_name -> drilldown_value
-	$drilldownMap = @{}
-	if ($t.parameters) {
-		foreach ($tp in $t.parameters) {
-			if ($tp.drilldown) { $drilldownMap["$($tp.name)"] = "$($tp.drilldown)" }
-		}
-	}
-
 	X "`t<template>"
 	X "`t`t<name>$(Esc-Xml "$($t.name)")</name>"
 	X "`t`t<template xmlns:dcsat=`"http://v8.1c.ru/8.1/data-composition-system/area-template`" xsi:type=`"dcsat:AreaTemplate`">"
@@ -1229,8 +1137,7 @@ function Emit-AreaTemplateDSL {
 		for ($c = 0; $c -lt $colCount; $c++) {
 			$cellVal = $rows[$r][$c]
 			$w = if ($c -lt $widths.Count) { [double]$widths[$c] } else { 0 }
-			$isVMerged = $vMerge[$r][$c] -eq $true
-			$isHMerged = $hMerge[$r][$c] -eq $true
+			$isMerged = $vMerge[$r][$c] -eq $true
 			# Check if this cell starts a vertical merge (next row has "|" in same column)
 			$startsVMerge = $false
 			for ($nr = $r + 1; $nr -lt $rows.Count; $nr++) {
@@ -1238,34 +1145,18 @@ function Emit-AreaTemplateDSL {
 			}
 
 			X "`t`t`t`t<dcsat:tableCell>"
-			if ($isVMerged) {
-				# Vertically merged cell — only appearance with vMerge flag + width
+			if ($isMerged) {
+				# Merged cell — only appearance with vMerge flag + width
 				Emit-CellAppearance $style $w $true
-			} elseif ($isHMerged) {
-				# Horizontally merged cell — only appearance with hMerge flag + width
-				Emit-CellAppearance $style $w $false $true
 			} else {
 				# Cell value
 				if ($null -ne $cellVal -and $cellVal -ne '') {
 					$cellStr = "$cellVal"
-					# Unescape \| and \>
-					if ($cellStr -eq '\|') { $cellStr = '|' }
-					elseif ($cellStr -eq '\>') { $cellStr = '>' }
 					if ($cellStr -match '^\{(.+)\}$') {
 						# Parameter reference
-						$paramName = $Matches[1]
 						X "`t`t`t`t`t<dcsat:item xsi:type=`"dcsat:Field`">"
-						X "`t`t`t`t`t`t<dcsat:value xsi:type=`"dcscor:Parameter`">$(Esc-Xml $paramName)</dcsat:value>"
+						X "`t`t`t`t`t`t<dcsat:value xsi:type=`"dcscor:Parameter`">$(Esc-Xml $Matches[1])</dcsat:value>"
 						X "`t`t`t`t`t</dcsat:item>"
-						# Build drilldown appearance extra items
-						$cellExtraItems = @()
-						if ($drilldownMap.ContainsKey($paramName)) {
-							$ddVal = $drilldownMap[$paramName]
-							$cellExtraItems += "`t`t`t`t`t<dcscor:item>"
-							$cellExtraItems += "`t`t`t`t`t`t<dcscor:parameter>Расшифровка</dcscor:parameter>"
-							$cellExtraItems += "`t`t`t`t`t`t<dcscor:value xsi:type=`"dcscor:Parameter`">Расшифровка_$ddVal</dcscor:value>"
-							$cellExtraItems += "`t`t`t`t`t</dcscor:item>"
-						}
 					} else {
 						# Static text
 						X "`t`t`t`t`t<dcsat:item xsi:type=`"dcsat:Field`">"
@@ -1280,9 +1171,7 @@ function Emit-AreaTemplateDSL {
 				}
 				# Appearance
 				$h = if ($r -eq 0) { $minHeight } else { 0 }
-				if (-not $cellExtraItems) { $cellExtraItems = @() }
-				Emit-CellAppearance $style $w $startsVMerge $false $h $cellExtraItems
-				$cellExtraItems = @()
+				Emit-CellAppearance $style $w $startsVMerge $h
 			}
 			X "`t`t`t`t</dcsat:tableCell>"
 		}
@@ -1297,18 +1186,6 @@ function Emit-AreaTemplateDSL {
 			X "`t`t`t<dcsat:name>$(Esc-Xml "$($tp.name)")</dcsat:name>"
 			X "`t`t`t<dcsat:expression>$(Esc-Xml "$($tp.expression)")</dcsat:expression>"
 			X "`t`t</parameter>"
-			# Drilldown parameter
-			if ($tp.drilldown) {
-				$ddVal = "$($tp.drilldown)"
-				X "`t`t<parameter xmlns:dcsat=`"http://v8.1c.ru/8.1/data-composition-system/area-template`" xsi:type=`"dcsat:DetailsAreaTemplateParameter`">"
-				X "`t`t`t<dcsat:name>Расшифровка_$(Esc-Xml $ddVal)</dcsat:name>"
-				X "`t`t`t<dcsat:fieldExpression>"
-				X "`t`t`t`t<dcsat:field>ИмяРесурса</dcsat:field>"
-				X "`t`t`t`t<dcsat:expression>`"$(Esc-Xml $ddVal)`"</dcsat:expression>"
-				X "`t`t`t</dcsat:fieldExpression>"
-				X "`t`t`t<dcsat:mainAction>DrillDown</dcsat:mainAction>"
-				X "`t`t</parameter>"
-			}
 		}
 	}
 	X "`t</template>"
@@ -1334,18 +1211,6 @@ function Emit-Templates {
 					X "`t`t`t<dcsat:name>$(Esc-Xml "$($tp.name)")</dcsat:name>"
 					X "`t`t`t<dcsat:expression>$(Esc-Xml "$($tp.expression)")</dcsat:expression>"
 					X "`t`t</parameter>"
-					# Drilldown parameter
-					if ($tp.drilldown) {
-						$ddVal = "$($tp.drilldown)"
-						X "`t`t<parameter xmlns:dcsat=`"http://v8.1c.ru/8.1/data-composition-system/area-template`" xsi:type=`"dcsat:DetailsAreaTemplateParameter`">"
-						X "`t`t`t<dcsat:name>Расшифровка_$(Esc-Xml $ddVal)</dcsat:name>"
-						X "`t`t`t<dcsat:fieldExpression>"
-						X "`t`t`t`t<dcsat:field>ИмяРесурса</dcsat:field>"
-						X "`t`t`t`t<dcsat:expression>`"$(Esc-Xml $ddVal)`"</dcsat:expression>"
-						X "`t`t`t</dcsat:fieldExpression>"
-						X "`t`t`t<dcsat:mainAction>DrillDown</dcsat:mainAction>"
-						X "`t`t</parameter>"
-					}
 				}
 			}
 			X "`t</template>"
@@ -1357,20 +1222,11 @@ function Emit-Templates {
 function Emit-GroupTemplates {
 	if (-not $def.groupTemplates) { return }
 	foreach ($gt in $def.groupTemplates) {
-		$ttype = if ($gt.templateType) { "$($gt.templateType)" } else { "Header" }
-		$isHeader = ($ttype -eq 'GroupHeader')
-		$tag = if ($isHeader) { 'groupHeaderTemplate' } else { 'groupTemplate' }
-		$xmlTType = if ($isHeader) { 'Header' } else { $ttype }
-
-		X "`t<$tag>"
-		if ($gt.groupName) {
-			X "`t`t<groupName>$(Esc-Xml "$($gt.groupName)")</groupName>"
-		} elseif ($gt.groupField) {
-			X "`t`t<groupField>$(Esc-Xml "$($gt.groupField)")</groupField>"
-		}
-		X "`t`t<templateType>$(Esc-Xml $xmlTType)</templateType>"
+		X "`t<groupTemplate>"
+		X "`t`t<groupField>$(Esc-Xml "$($gt.groupField)")</groupField>"
+		X "`t`t<templateType>$(Esc-Xml "$($gt.templateType)")</templateType>"
 		X "`t`t<template>$(Esc-Xml "$($gt.template)")</template>"
-		X "`t</$tag>"
+		X "`t</groupTemplate>"
 	}
 }
 
@@ -1393,22 +1249,6 @@ function Emit-Selection {
 				X "$indent`t`t<dcsset:field>$(Esc-Xml $item)</dcsset:field>"
 				X "$indent`t</dcsset:item>"
 			}
-		} elseif ($item.folder) {
-			X "$indent`t<dcsset:item xsi:type=`"dcsset:SelectedItemFolder`">"
-			X "$indent`t`t<dcsset:lwsTitle>"
-			X "$indent`t`t`t<v8:item>"
-			X "$indent`t`t`t`t<v8:lang>ru</v8:lang>"
-			X "$indent`t`t`t`t<v8:content>$(Esc-Xml "$($item.folder)")</v8:content>"
-			X "$indent`t`t`t</v8:item>"
-			X "$indent`t`t</dcsset:lwsTitle>"
-			foreach ($sub in $item.items) {
-				$subName = if ($sub -is [string]) { $sub } else { "$($sub.field)" }
-				X "$indent`t`t<dcsset:item xsi:type=`"dcsset:SelectedItemField`">"
-				X "$indent`t`t`t<dcsset:field>$(Esc-Xml $subName)</dcsset:field>"
-				X "$indent`t`t</dcsset:item>"
-			}
-			X "$indent`t`t<dcsset:placement>Auto</dcsset:placement>"
-			X "$indent`t</dcsset:item>"
 		} else {
 			X "$indent`t<dcsset:item xsi:type=`"dcsset:SelectedItemField`">"
 			X "$indent`t`t<dcsset:field>$(Esc-Xml "$($item.field)")</dcsset:field>"
@@ -1592,7 +1432,7 @@ function Emit-AppearanceValue {
 		X "$indent`t<dcscor:value xsi:type=`"v8ui:Color`">$(Esc-Xml $actualVal)</dcscor:value>"
 	} elseif ($actualVal -eq "true" -or $actualVal -eq "false") {
 		X "$indent`t<dcscor:value xsi:type=`"xs:boolean`">$actualVal</dcscor:value>"
-	} elseif ($key -eq "Текст" -or $key -eq "Заголовок" -or $key -eq "Формат") {
+	} elseif ($key -eq "Текст" -or $key -eq "Заголовок") {
 		X "$indent`t<dcscor:value xsi:type=`"v8:LocalStringType`">"
 		X "$indent`t`t<v8:item>"
 		X "$indent`t`t`t<v8:lang>ru</v8:lang>"
@@ -1821,10 +1661,6 @@ function Parse-StructureShorthand {
 		if ($seg -match '^(?i)(details|детали)$') {
 			# Empty groupBy = detailed records
 			$group | Add-Member -NotePropertyName "groupBy" -NotePropertyValue @()
-		} elseif ($seg -match '^(.+)\[(.+)\]$') {
-			# Named group: "ИмяГруппы[Поле]"
-			$group | Add-Member -NotePropertyName "name" -NotePropertyValue $Matches[1].Trim()
-			$group | Add-Member -NotePropertyName "groupBy" -NotePropertyValue @($Matches[2].Trim())
 		} else {
 			$group | Add-Member -NotePropertyName "groupBy" -NotePropertyValue @($seg)
 		}
@@ -2032,22 +1868,7 @@ function Emit-SettingsVariants {
 		}
 
 		# DataParameters
-		if ($s.dataParameters -eq 'auto') {
-			# Auto-generate dataParameters for all non-hidden params
-			$autoDP = @()
-			foreach ($ap in $script:allParams) {
-				if (-not $ap.hidden) {
-					$dpItem = New-Object PSObject
-					$dpItem | Add-Member -NotePropertyName "parameter" -NotePropertyValue $ap.name
-					$dpItem | Add-Member -NotePropertyName "use" -NotePropertyValue $false
-					$dpItem | Add-Member -NotePropertyName "userSettingID" -NotePropertyValue "auto"
-					$autoDP += $dpItem
-				}
-			}
-			if ($autoDP.Count -gt 0) {
-				Emit-DataParameters -items $autoDP -indent "`t`t`t"
-			}
-		} elseif ($s.dataParameters) {
+		if ($s.dataParameters) {
 			Emit-DataParameters -items $s.dataParameters -indent "`t`t`t"
 		}
 

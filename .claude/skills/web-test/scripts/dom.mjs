@@ -1176,15 +1176,7 @@ export function checkErrorsScript() {
       }
     }
 
-    // 5. SpreadsheetDocument state window (info bar inside moxelContainer)
-    // Shows messages like "Не установлено значение параметра X" or "Отчет не сформирован"
-    const stateWins = [...document.querySelectorAll('.stateWindowSupportSurface')].filter(el => el.offsetWidth > 0);
-    if (stateWins.length) {
-      const texts = stateWins.map(el => el.innerText?.trim()).filter(Boolean);
-      if (texts.length) result.stateText = texts;
-    }
-
-    return (result.balloon || result.messages || result.modal || result.confirmation || result.stateText) ? result : null;
+    return (result.balloon || result.messages || result.modal || result.confirmation) ? result : null;
   })()`;
 }
 
