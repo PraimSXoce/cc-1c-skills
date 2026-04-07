@@ -947,6 +947,25 @@ function Emit-Attributes {
 			X "$inner<FillChecking>$($attr.fillChecking)</FillChecking>"
 		}
 
+		# Settings (for DynamicList — mainTable)
+		$attrType = "$($attr.type)"
+		if ($attrType -eq "DynamicList" -and $attr.mainTable) {
+			$mainTable = "$($attr.mainTable)"
+			X "$inner<Settings xsi:type=`"DynamicList`">"
+			if ($attr.manualQuery -eq $true) {
+				X "$inner`t<ManualQuery>true</ManualQuery>"
+				X "$inner`t<DynamicDataRead>true</DynamicDataRead>"
+				if ($attr.queryText) {
+					X "$inner`t<QueryText>$($attr.queryText)</QueryText>"
+				}
+			} else {
+				X "$inner`t<ManualQuery>false</ManualQuery>"
+				X "$inner`t<DynamicDataRead>true</DynamicDataRead>"
+			}
+			X "$inner`t<MainTable>$mainTable</MainTable>"
+			X "$inner</Settings>"
+		}
+
 		# Columns (for ValueTable/ValueTree)
 		if ($attr.columns -and $attr.columns.Count -gt 0) {
 			X "$inner<Columns>"
