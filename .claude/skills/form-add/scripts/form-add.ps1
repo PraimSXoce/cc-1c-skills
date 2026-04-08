@@ -339,7 +339,12 @@ if (-not $childObjects) {
 	exit 1
 }
 
-# Добавить <Form>$FormName</Form>
+# Добавить <Form>$FormName</Form> (если ещё нет)
+$existingForm = $childObjects.SelectSingleNode("md:Form[text()='$FormName']", $nsMgr)
+if ($existingForm) {
+	Write-Host "[SKIP] <Form>$FormName</Form> already in ChildObjects — skipping registration"
+} else {
+
 $formElem = $xmlDoc.CreateElement("Form", "http://v8.1c.ru/8.3/MDClasses")
 $formElem.InnerText = $FormName
 
@@ -393,6 +398,8 @@ if ($insertBefore) {
 		}
 	}
 }
+
+} # end else (form not yet registered)
 
 # --- SetDefault ---
 
