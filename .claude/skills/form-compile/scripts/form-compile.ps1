@@ -1152,7 +1152,7 @@ if ($def.excludedCommands -and $def.excludedCommands.Count -gt 0) {
 # 12d. AutoCommandBar (always present, id=-1)
 X "`t<AutoCommandBar name=`"ФормаКоманднаяПанель`" id=`"-1`">"
 X "`t`t<HorizontalAlign>Right</HorizontalAlign>"
-X "`t`t<Autofill>false</Autofill>"
+X "`t`t<Autofill>true</Autofill>"
 X "`t</AutoCommandBar>"
 
 # 12e. Events

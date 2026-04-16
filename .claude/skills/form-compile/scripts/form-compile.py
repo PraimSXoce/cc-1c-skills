@@ -1046,7 +1046,7 @@ def main():
     # AutoCommandBar (always present, id=-1)
     lines.append('\t<AutoCommandBar name="\u0424\u043e\u0440\u043c\u0430\u041a\u043e\u043c\u0430\u043d\u0434\u043d\u0430\u044f\u041f\u0430\u043d\u0435\u043b\u044c" id="-1">')
     lines.append('\t\t<HorizontalAlign>Right</HorizontalAlign>')
-    lines.append('\t\t<Autofill>false</Autofill>')
+    lines.append('\t\t<Autofill>true</Autofill>')
     lines.append('\t</AutoCommandBar>')
 
     # Events
